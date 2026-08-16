@@ -1,0 +1,138 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Informações do perfil do usuário logado",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["email", "createdAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Item do estoque ou lanche/ficha técnica do usuário",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "quantity": { "type": "number" },
+        "unit": { "type": "string" },
+        "minStock": { "type": "number" },
+        "isRecipe": { "type": "boolean" },
+        "costPrice": { "type": "number" },
+        "sellPrice": { "type": "number" },
+        "price": { "type": "number" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["name", "category", "quantity", "unit", "minStock"]
+    },
+    "Audit": {
+      "title": "Audit",
+      "description": "Registro de conferência diária de estoque",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "items": { "type": "array" },
+        "totalProducts": { "type": "number" },
+        "auditedProducts": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["date", "timestamp", "items"]
+    },
+    "StockMovement": {
+      "title": "StockMovement",
+      "description": "Histórico de entradas e saídas de estoque",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "type": { "type": "string" },
+        "quantity": { "type": "number" },
+        "previousQuantity": { "type": "number" },
+        "newQuantity": { "type": "number" },
+        "reason": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "date": { "type": "string" }
+      },
+      "required": ["productId", "productName", "type", "quantity", "timestamp", "date"]
+    },
+    "ShoppingItem": {
+      "title": "ShoppingItem",
+      "description": "Item no carrinho / lista de compras",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "quantityToBuy": { "type": "number" },
+        "isPurchased": { "type": "boolean" },
+        "unit": { "type": "string" }
+      },
+      "required": ["productId", "productName", "quantityToBuy", "isPurchased"]
+    },
+    "RecipeSaleRecord": {
+      "title": "RecipeSaleRecord",
+      "description": "Registro de saída/venda de lanche e baixa em cascata",
+      "type": "object",
+      "properties": {
+        "recipeId": { "type": "string" },
+        "recipeName": { "type": "string" },
+        "quantitySold": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "profit": { "type": "number" },
+        "timestamp": { "type": "number" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "deductions": { "type": "array" }
+      },
+      "required": ["recipeId", "recipeName", "quantitySold", "timestamp", "date"]
+    },
+    "SystemSettings": {
+      "title": "SystemSettings",
+      "description": "Configurações do sistema do usuário",
+      "type": "object",
+      "properties": {
+        "safetyMarginDays": { "type": "number" },
+        "companyName": { "type": "string" },
+        "allowNegativeStock": { "type": "boolean" },
+        "showPrices": { "type": "boolean" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Documento do usuário autenticado"
+    },
+    "/users/{userId}/products/{productId}": {
+      "schema": "Product",
+      "description": "Produtos do estoque e fichas técnicas do usuário"
+    },
+    "/users/{userId}/audits/{auditId}": {
+      "schema": "Audit",
+      "description": "Conferências de estoque do usuário"
+    },
+    "/users/{userId}/history/{movementId}": {
+      "schema": "StockMovement",
+      "description": "Histórico de movimentações do usuário"
+    },
+    "/users/{userId}/purchases/{purchaseId}": {
+      "schema": "ShoppingItem",
+      "description": "Lista de compras do usuário"
+    },
+    "/users/{userId}/recipeSales/{saleId}": {
+      "schema": "RecipeSaleRecord",
+      "description": "Vendas de lanches e baixas registradas pelo usuário"
+    },
+    "/users/{userId}/settings/{settingId}": {
+      "schema": "SystemSettings",
+      "description": "Configurações personalizadas do usuário"
+    }
+  }
+}
