@@ -15,9 +15,10 @@ import {
   Trash2,
   PackagePlus,
   Search,
-  Layers
+  Layers,
+  Pencil
 } from 'lucide-react';
-import { Product, PurchaseItem, SystemSettings } from '../types';
+import { Product, PurchaseItem, SystemSettings, Unit } from '../types';
 import { TextExportService } from '../services/textExportService';
 import { StorageService } from '../services/storageService';
 import { WhatsAppShareModal } from './WhatsAppShareModal';
@@ -32,9 +33,18 @@ interface ShoppingListViewProps {
   onTogglePurchased: (productId: string) => void;
   onUpdateItemQuantity?: (productId: string, quantity: number) => void;
   onRemoveFromCart?: (productId: string) => void;
-  onAddToCart?: (productId: string, quantity: number) => void;
+  onAddToCart?: (
+    productId: string, 
+    quantity: number,
+    customFields?: {
+      unit?: Unit;
+      costPrice?: number;
+      category?: string;
+    }
+  ) => void;
   onExportPDF: () => void;
   categories?: string[];
+  onAddCategory?: (newCategory: string) => void;
 }
 
 export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
@@ -47,7 +57,8 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   onRemoveFromCart,
   onAddToCart,
   onExportPDF,
-  categories = []
+  categories = [],
+  onAddCategory
 }) => {
   const [safetyDaysInput, setSafetyDaysInput] = useState<number>(settings.safetyDays || 7);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
@@ -152,32 +163,59 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
         </div>
       </div>
 
-      {/* Safety Days Smart Config Box */}
+      {/* Shopping Mode & Smart Config Box */}
       <div className="bg-gradient-to-r from-purple-900 via-slate-900 to-purple-950 text-white p-5 rounded-2xl border border-purple-800/60 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="p-3 bg-purple-500/20 rounded-xl text-purple-300">
-            <Sparkles className="w-6 h-6" />
+            <ShoppingCart className="w-6 h-6" />
           </div>
           <div>
-            <h3 className="font-bold text-base text-white">Cálculo Automático de Reposição</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="font-bold text-base text-white">
+                {settings.autoGenerateShopping ? 'Reposição Automática Ativada' : 'Modo Manual de Compras (Ativo)'}
+              </h3>
+              <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full ${
+                settings.autoGenerateShopping ? 'bg-purple-500/30 text-purple-200' : 'bg-emerald-500/30 text-emerald-300'
+              }`}>
+                {settings.autoGenerateShopping ? 'Auto' : 'Manual'}
+              </span>
+            </div>
             <p className="text-xs text-purple-200/80 mt-0.5">
-              Itens abaixo do mínimo ou com estoque para menos de {safetyDaysInput} dias entram automaticamente no carrinho.
+              {settings.autoGenerateShopping
+                ? `Itens abaixo do mínimo ou com estoque para menos de ${safetyDaysInput} dias entram no carrinho.`
+                : 'Você tem controle total: adicione os itens manualmente e edite a quantidade em quilos ou unidades.'}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3 bg-slate-800/80 px-4 py-2 rounded-xl border border-purple-500/30">
-          <ShieldCheck className="w-5 h-5 text-purple-400" />
-          <label className="text-xs font-semibold text-slate-200">Dias de Segurança:</label>
-          <input
-            type="number"
-            min="1"
-            max="60"
-            value={safetyDaysInput}
-            onChange={(e) => handleSafetyDaysChange(parseInt(e.target.value) || 1)}
-            className="w-16 px-2 py-1 rounded-lg bg-slate-900 border border-purple-400 text-center font-bold text-sm text-purple-300 focus:outline-none"
-          />
-          <span className="text-xs text-slate-400">dias</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => onUpdateSettings({ ...settings, autoGenerateShopping: !settings.autoGenerateShopping })}
+            className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+              settings.autoGenerateShopping
+                ? 'bg-purple-600/40 hover:bg-purple-600/60 border-purple-400 text-purple-100'
+                : 'bg-emerald-600/40 hover:bg-emerald-600/60 border-emerald-400 text-emerald-100'
+            }`}
+          >
+            {settings.autoGenerateShopping ? 'Trocar para Manual' : 'Usar Modo Manual'}
+          </button>
+
+          {settings.autoGenerateShopping && (
+            <div className="flex items-center gap-2 bg-slate-800/80 px-3 py-1.5 rounded-xl border border-purple-500/30">
+              <ShieldCheck className="w-4 h-4 text-purple-400" />
+              <label className="text-xs font-semibold text-slate-200">Segurança:</label>
+              <input
+                type="number"
+                min="1"
+                max="60"
+                value={safetyDaysInput}
+                onChange={(e) => handleSafetyDaysChange(parseInt(e.target.value) || 1)}
+                className="w-14 px-1.5 py-0.5 rounded-lg bg-slate-900 border border-purple-400 text-center font-bold text-xs text-purple-300 focus:outline-none"
+              />
+              <span className="text-xs text-slate-400">dias</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -272,44 +310,55 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                     <div className="flex flex-col items-center sm:items-start">
                       <span className="text-[10px] font-bold text-purple-900 uppercase">Qtd. a Comprar</span>
                       <div className="flex items-center gap-1.5 mt-1 bg-white p-1 rounded-xl border border-purple-200 shadow-2xs">
-                        <button
-                          onClick={() => {
-                            if (onUpdateItemQuantity) {
-                              onUpdateItemQuantity(item.productId, Math.max(1, item.suggestedQuantity - 1));
-                            }
-                          }}
-                          className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-purple-100 text-purple-900 flex items-center justify-center font-bold text-xs transition-colors"
-                          title="Diminuir 1"
-                        >
-                          <Minus className="w-3.5 h-3.5" />
-                        </button>
-                        
-                        <input
-                          type="number"
-                          min="1"
-                          value={item.suggestedQuantity}
-                          onChange={(e) => {
-                            const val = parseInt(e.target.value) || 1;
-                            if (onUpdateItemQuantity) {
-                              onUpdateItemQuantity(item.productId, Math.max(1, val));
-                            }
-                          }}
-                          className="w-14 text-center font-black text-sm text-purple-950 bg-transparent focus:outline-none"
-                        />
+                        {(() => {
+                          const isDecimalUnit = ['Kg', 'Grama', 'Litro'].includes(item.unit);
+                          const step = isDecimalUnit ? 0.5 : 1;
+                          return (
+                            <>
+                              <button
+                                onClick={() => {
+                                  if (onUpdateItemQuantity) {
+                                    const next = Number(Math.max(isDecimalUnit ? 0.1 : 1, item.suggestedQuantity - step).toFixed(2));
+                                    onUpdateItemQuantity(item.productId, next);
+                                  }
+                                }}
+                                className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-purple-100 text-purple-900 flex items-center justify-center font-bold text-xs transition-colors cursor-pointer"
+                                title={`Diminuir ${step}`}
+                              >
+                                <Minus className="w-3.5 h-3.5" />
+                              </button>
+                              
+                              <input
+                                type="number"
+                                min={isDecimalUnit ? "0.05" : "1"}
+                                step={isDecimalUnit ? "0.1" : "1"}
+                                value={item.suggestedQuantity}
+                                onChange={(e) => {
+                                  const val = parseFloat(e.target.value);
+                                  if (onUpdateItemQuantity && !isNaN(val) && val > 0) {
+                                    onUpdateItemQuantity(item.productId, val);
+                                  }
+                                }}
+                                className="w-16 text-center font-black text-sm text-purple-950 bg-transparent focus:outline-none"
+                              />
 
-                        <span className="text-[11px] font-semibold text-slate-500 pr-1">{item.unit}</span>
+                              <span className="text-[11px] font-semibold text-slate-500 pr-1">{item.unit}</span>
 
-                        <button
-                          onClick={() => {
-                            if (onUpdateItemQuantity) {
-                              onUpdateItemQuantity(item.productId, item.suggestedQuantity + 1);
-                            }
-                          }}
-                          className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-purple-100 text-purple-900 flex items-center justify-center font-bold text-xs transition-colors"
-                          title="Aumentar 1"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                        </button>
+                              <button
+                                onClick={() => {
+                                  if (onUpdateItemQuantity) {
+                                    const next = Number((item.suggestedQuantity + step).toFixed(2));
+                                    onUpdateItemQuantity(item.productId, next);
+                                  }
+                                }}
+                                className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-purple-100 text-purple-900 flex items-center justify-center font-bold text-xs transition-colors cursor-pointer"
+                                title={`Aumentar ${step}`}
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
 
@@ -342,11 +391,34 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                       </div>
                     )}
 
+                    {/* Edit button */}
+                    <button
+                      onClick={() => {
+                        const prod = products.find(p => p.id === item.productId) || {
+                          id: item.productId,
+                          name: item.productName,
+                          category: item.category,
+                          quantity: item.currentQuantity,
+                          unit: item.unit,
+                          minStock: item.minStock,
+                          costPrice: item.costPrice ?? item.price,
+                          price: item.costPrice ?? item.price,
+                          createdAt: ''
+                        } as Product;
+                        setSelectedProductForCart(prod);
+                      }}
+                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-purple-100/80 hover:bg-purple-200 text-purple-900 text-xs font-bold transition-colors cursor-pointer"
+                      title="Editar quantidade, valor, unidade e categoria"
+                    >
+                      <Pencil className="w-3.5 h-3.5 text-purple-700" />
+                      <span>Editar</span>
+                    </button>
+
                     {/* Remove from cart button */}
                     {onRemoveFromCart && (
                       <button
                         onClick={() => onRemoveFromCart(item.productId)}
-                        className="p-2 rounded-xl text-rose-500 hover:bg-rose-100/80 transition-colors ml-1"
+                        className="p-2 rounded-xl text-rose-500 hover:bg-rose-100/80 transition-colors ml-1 cursor-pointer"
                         title="Remover do carrinho de compras"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -485,10 +557,11 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
         isOpen={!!selectedProductForCart}
         product={selectedProductForCart}
         currentPurchaseItem={selectedProductForCart ? shoppingItems.find(i => i.productId === selectedProductForCart.id) : null}
+        availableCategories={categories}
         onClose={() => setSelectedProductForCart(null)}
-        onAddToCart={(productId, quantity) => {
+        onAddToCart={(productId, quantity, customFields) => {
           if (onAddToCart) {
-            onAddToCart(productId, quantity);
+            onAddToCart(productId, quantity, customFields);
           }
         }}
         onRemoveFromCart={(productId) => {
@@ -496,6 +569,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
             onRemoveFromCart(productId);
           }
         }}
+        onAddCategory={onAddCategory}
       />
 
       {/* WhatsApp Share Modal */}

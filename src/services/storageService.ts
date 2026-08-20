@@ -1,4 +1,4 @@
-import { Product, AuditRecord, SystemSettings, PurchaseItem, VelocityClass, RecipeSaleRecord, RecipeSaleDeduction, DEFAULT_CATEGORIES } from '../types';
+import { Product, AuditRecord, AuditItem, SystemSettings, PurchaseItem, VelocityClass, RecipeSaleRecord, RecipeSaleDeduction, DEFAULT_CATEGORIES, ReportExportConfig, DEFAULT_REPORT_CONFIG } from '../types';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'estoque_app_products_v1',
@@ -6,7 +6,9 @@ const STORAGE_KEYS = {
   CATEGORIES: 'estoque_app_categories_v1',
   SETTINGS: 'estoque_app_settings_v1',
   PURCHASES: 'estoque_app_purchases_v1',
-  RECIPE_SALES: 'estoque_app_recipe_sales_v1'
+  RECIPE_SALES: 'estoque_app_recipe_sales_v1',
+  AUDIT_DRAFT: 'estoque_app_audit_draft_v1',
+  REPORT_CONFIG: 'estoque_app_report_config_v1'
 };
 
 export const DEFAULT_SETTINGS: SystemSettings = {
@@ -14,6 +16,8 @@ export const DEFAULT_SETTINGS: SystemSettings = {
   appName: 'Gestão de Estoque',
   companyName: 'Meu Estabelecimento',
   showPrices: true,
+  showMinStock: false, // Opcional / Desativado por padrão: foco em quantidade atual
+  autoGenerateShopping: false, // Default to purely manual addition per user request
   categoryOrder: DEFAULT_CATEGORIES,
   themeColor: 'emerald',
   themeMode: 'light'
@@ -335,6 +339,55 @@ export class StorageService {
     localStorage.setItem(STORAGE_KEYS.RECIPE_SALES, JSON.stringify(sales));
   }
 
+  static getAuditDraft(): AuditItem[] | null {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.AUDIT_DRAFT);
+      return data ? JSON.parse(data) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  static saveAuditDraft(draft: AuditItem[]): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.AUDIT_DRAFT, JSON.stringify(draft));
+    } catch {
+      // Ignore write errors
+    }
+  }
+
+  static clearAuditDraft(): void {
+    try {
+      localStorage.removeItem(STORAGE_KEYS.AUDIT_DRAFT);
+    } catch {
+      // Ignore write errors
+    }
+  }
+
+  static getReportConfig(): ReportExportConfig {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.REPORT_CONFIG);
+      if (data) {
+        return { ...DEFAULT_REPORT_CONFIG, ...JSON.parse(data) };
+      }
+      const settings = this.getSettings();
+      if (settings.reportConfig) {
+        return { ...DEFAULT_REPORT_CONFIG, ...settings.reportConfig };
+      }
+      return DEFAULT_REPORT_CONFIG;
+    } catch {
+      return DEFAULT_REPORT_CONFIG;
+    }
+  }
+
+  static saveReportConfig(config: ReportExportConfig): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.REPORT_CONFIG, JSON.stringify(config));
+    } catch {
+      // Ignore write errors
+    }
+  }
+
   /**
    * Calculate unit cost of a recipe based on the current cost price of its ingredients
    */
@@ -526,45 +579,70 @@ export class StorageService {
   }
 
   /**
-   * Automatic and manual shopping list generator based on stock level + safety buffer days + user additions
+   * Shopping list generator:
+   * - By default, respects manual additions strictly (user controls what to buy).
+   * - If autoGenerateShopping is enabled by user, adds items below minimum/safety buffer.
    */
   static generateShoppingList(products: Product[], settings: SystemSettings): PurchaseItem[] {
     const existingPurchases = this.getPurchases().filter(item => 
       products.some(p => p.id === item.productId)
     );
     const safetyDays = settings.safetyDays || 7;
+    const isAutoEnabled = settings.autoGenerateShopping === true;
 
     const result: PurchaseItem[] = [];
 
-    products.forEach(p => {
-      const existing = existingPurchases.find(item => item.productId === p.id);
-      const avgDaily = p.avgDailyConsumption || 0;
-      const remainingDays = avgDaily > 0 ? p.quantity / avgDaily : 999;
-      
-      const isCriticalOrLow = p.quantity <= p.minStock || remainingDays < safetyDays;
-
-      // Include if it's already in the cart OR if it automatically needs replenishment
-      if (existing || isCriticalOrLow) {
-        const targetStock = Math.max(p.minStock, Math.ceil(avgDaily * safetyDays));
-        const neededAuto = Math.max(1, targetStock - p.quantity);
-        const finalQuantity = existing ? (existing.suggestedQuantity || neededAuto) : neededAuto;
-
+    // First, populate all items already added by the user
+    existingPurchases.forEach(existing => {
+      const p = products.find(prod => prod.id === existing.productId);
+      if (p) {
         result.push({
           productId: p.id,
           productName: p.name,
           category: p.category,
           currentQuantity: p.quantity,
           minStock: p.minStock,
-          suggestedQuantity: finalQuantity,
-          unit: p.unit,
+          suggestedQuantity: existing.suggestedQuantity ?? 1,
+          unit: existing.unit || p.unit,
           costPrice: p.costPrice ?? p.price,
           sellPrice: p.sellPrice,
           price: p.costPrice ?? p.price,
-          isPurchased: existing ? existing.isPurchased : false,
-          purchasedAt: existing ? existing.purchasedAt : undefined
+          isPurchased: existing.isPurchased || false,
+          purchasedAt: existing.purchasedAt
         });
       }
     });
+
+    // If automatic replenishment is requested by user, add low stock products not yet in cart
+    if (isAutoEnabled) {
+      products.forEach(p => {
+        const alreadyInCart = result.some(item => item.productId === p.id);
+        if (!alreadyInCart) {
+          const avgDaily = p.avgDailyConsumption || 0;
+          const remainingDays = avgDaily > 0 ? p.quantity / avgDaily : 999;
+          const isCriticalOrLow = p.quantity <= p.minStock || remainingDays < safetyDays;
+
+          if (isCriticalOrLow) {
+            const targetStock = Math.max(p.minStock, Math.ceil(avgDaily * safetyDays));
+            const neededAuto = Math.max(1, targetStock - p.quantity);
+
+            result.push({
+              productId: p.id,
+              productName: p.name,
+              category: p.category,
+              currentQuantity: p.quantity,
+              minStock: p.minStock,
+              suggestedQuantity: neededAuto,
+              unit: p.unit,
+              costPrice: p.costPrice ?? p.price,
+              sellPrice: p.sellPrice,
+              price: p.costPrice ?? p.price,
+              isPurchased: false
+            });
+          }
+        }
+      });
+    }
 
     return result;
   }
@@ -617,5 +695,16 @@ export class StorageService {
     localStorage.removeItem(STORAGE_KEYS.SETTINGS);
     localStorage.removeItem(STORAGE_KEYS.PURCHASES);
     localStorage.removeItem(STORAGE_KEYS.RECIPE_SALES);
+    localStorage.removeItem(STORAGE_KEYS.AUDIT_DRAFT);
+  }
+
+  static initializeEmptyUserData(): void {
+    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.AUDITS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.PURCHASES, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.RECIPE_SALES, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify([]));
+    localStorage.removeItem(STORAGE_KEYS.AUDIT_DRAFT);
+    this.saveSettings(DEFAULT_SETTINGS);
   }
 }

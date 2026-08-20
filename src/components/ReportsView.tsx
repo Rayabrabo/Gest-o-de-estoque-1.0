@@ -12,12 +12,15 @@ import {
   DollarSign,
   MessageSquare,
   Layers,
-  ArrowUpDown
+  ArrowUpDown,
+  SlidersHorizontal
 } from 'lucide-react';
-import { Product, AuditRecord, SystemSettings, PurchaseItem } from '../types';
+import { Product, AuditRecord, SystemSettings, PurchaseItem, ReportExportConfig } from '../types';
 import { TextExportService } from '../services/textExportService';
+import { PdfService } from '../services/pdfService';
 import { WhatsAppShareModal } from './WhatsAppShareModal';
 import { CategoryOrderModal } from './CategoryOrderModal';
+import { ReportConfigModal } from './ReportConfigModal';
 
 interface ReportsViewProps {
   products: Product[];
@@ -44,6 +47,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   const [shareText, setShareText] = useState<string | null>(null);
   const [shareTitle, setShareTitle] = useState('TEXTO PARA WHATSAPP');
   const [isCategoryOrderModalOpen, setIsCategoryOrderModalOpen] = useState(false);
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
 
   const highVelocityItems = products.filter(p => p.velocityClass === 'high');
   const mediumVelocityItems = products.filter(p => p.velocityClass === 'medium' || !p.velocityClass);
@@ -52,8 +56,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   const showPrices = settings.showPrices !== false;
   const totalEstVal = products.reduce((acc, p) => acc + (p.quantity * (p.price || 0)), 0);
 
-  const handleExportInventoryWhatsApp = () => {
-    const txt = TextExportService.generateInventoryText(products, settings);
+  const handleExportInventoryWhatsApp = (customConfig?: Partial<ReportExportConfig>) => {
+    const txt = TextExportService.generateInventoryText(products, settings, customConfig);
     setShareTitle('RESUMO DE ESTOQUE — TEXTO WHATSAPP');
     setShareText(txt);
     setIsShareModalOpen(true);
@@ -64,6 +68,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     setShareTitle('LISTA DE COMPRAS — TEXTO WHATSAPP');
     setShareText(txt);
     setIsShareModalOpen(true);
+  };
+
+  const handleExportInventoryPDFCustom = (customConfig?: Partial<ReportExportConfig>) => {
+    PdfService.generateInventoryReport(products, latestAudit, settings, customConfig);
   };
 
   return (
@@ -80,16 +88,28 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
           </p>
         </div>
 
-        {onSaveSettings && (
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
           <button
             type="button"
-            onClick={() => setIsCategoryOrderModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer self-start sm:self-auto"
+            onClick={() => setIsConfigModalOpen(true)}
+            className="flex items-center gap-2 px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold shadow-2xs transition-all cursor-pointer"
+            title="Configurar colunas e filtros do relatório"
           >
-            <Layers className="w-4 h-4 text-emerald-400" />
-            <span>ORGANIZAR ORDEM DAS CATEGORIAS</span>
+            <SlidersHorizontal className="w-4 h-4 text-emerald-600" />
+            <span>CONFIGURAR RELATÓRIO</span>
           </button>
-        )}
+
+          {onSaveSettings && (
+            <button
+              type="button"
+              onClick={() => setIsCategoryOrderModalOpen(true)}
+              className="flex items-center gap-2 px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer"
+            >
+              <Layers className="w-4 h-4 text-emerald-400" />
+              <span>ORDEM DAS CATEGORIAS</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Quick PDF Action Cards Banner */}
@@ -101,7 +121,14 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
               <span className="bg-emerald-500/20 text-emerald-400 text-xs font-bold px-3 py-1 rounded-full border border-emerald-500/30">
                 RELATÓRIO OFICIAL DE ESTOQUE
               </span>
-              <FileText className="w-5 h-5 text-emerald-400" />
+              <button
+                onClick={() => setIsConfigModalOpen(true)}
+                className="text-slate-300 hover:text-white text-xs flex items-center gap-1 font-semibold hover:underline cursor-pointer"
+                title="Configurar opções de exibição do PDF e WhatsApp"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Opções</span>
+              </button>
             </div>
             <h3 className="text-lg font-bold">Relatório Completo de Estoque (PDF)</h3>
             <p className="text-xs text-slate-300 mt-1 leading-relaxed">
@@ -111,16 +138,16 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <button
-              onClick={handleExportInventoryWhatsApp}
-              className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold py-2.5 px-3 rounded-xl border border-emerald-500/30 transition-all text-xs active:scale-95"
+              onClick={() => handleExportInventoryWhatsApp()}
+              className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold py-2.5 px-3 rounded-xl border border-emerald-500/30 transition-all text-xs active:scale-95 cursor-pointer"
             >
               <MessageSquare className="w-4 h-4 text-emerald-400" />
               <span>TEXTO WHATSAPP</span>
             </button>
 
             <button
-              onClick={onExportInventoryPDF}
-              className="w-full flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold py-2.5 px-3 rounded-xl shadow-md transition-all text-xs active:scale-95"
+              onClick={() => handleExportInventoryPDFCustom()}
+              className="w-full flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold py-2.5 px-3 rounded-xl shadow-md transition-all text-xs active:scale-95 cursor-pointer"
             >
               <Download className="w-4 h-4" />
               <span>📄 GERAR PDF</span>
@@ -146,7 +173,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <button
               onClick={handleExportShoppingWhatsApp}
-              className="w-full flex items-center justify-center gap-2 bg-purple-900/80 hover:bg-purple-800 text-purple-200 font-bold py-2.5 px-3 rounded-xl border border-purple-500/30 transition-all text-xs active:scale-95"
+              className="w-full flex items-center justify-center gap-2 bg-purple-900/80 hover:bg-purple-800 text-purple-200 font-bold py-2.5 px-3 rounded-xl border border-purple-500/30 transition-all text-xs active:scale-95 cursor-pointer"
             >
               <MessageSquare className="w-4 h-4 text-purple-300" />
               <span>TEXTO WHATSAPP</span>
@@ -154,7 +181,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
 
             <button
               onClick={onExportShoppingPDF}
-              className="w-full flex items-center justify-center gap-2 bg-purple-600 hover:bg-purple-500 text-white font-bold py-2.5 px-3 rounded-xl shadow-md transition-all text-xs active:scale-95"
+              className="w-full flex items-center justify-center gap-2 bg-purple-600 hover:bg-purple-500 text-white font-bold py-2.5 px-3 rounded-xl shadow-md transition-all text-xs active:scale-95 cursor-pointer"
             >
               <Download className="w-4 h-4" />
               <span>📄 GERAR PDF</span>
@@ -315,6 +342,18 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
           title={shareTitle}
           subtitle="O relatório foi formatado com sucesso para envio rápido pelo WhatsApp."
           textToShare={shareText}
+          onDownloadPdf={() => handleExportInventoryPDFCustom()}
+        />
+      )}
+
+      {/* Report Configuration Modal */}
+      {isConfigModalOpen && (
+        <ReportConfigModal
+          isOpen={isConfigModalOpen}
+          onClose={() => setIsConfigModalOpen(false)}
+          settings={settings}
+          onGeneratePDF={(cfg) => handleExportInventoryPDFCustom(cfg)}
+          onGenerateWhatsApp={(cfg) => handleExportInventoryWhatsApp(cfg)}
         />
       )}
 

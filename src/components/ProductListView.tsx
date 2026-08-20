@@ -15,7 +15,7 @@ import {
   ShoppingCart,
   Utensils
 } from 'lucide-react';
-import { Product, VelocityClass, SystemSettings, PurchaseItem } from '../types';
+import { Product, VelocityClass, SystemSettings, PurchaseItem, Unit } from '../types';
 import { ConfirmModal } from './ConfirmModal';
 import { AddToCartModal } from './AddToCartModal';
 import { StorageService } from '../services/storageService';
@@ -28,7 +28,15 @@ interface ProductListViewProps {
   onEditProduct: (product: Product) => void;
   onDeleteProduct: (productId: string) => void;
   onQuickUpdateQuantity: (productId: string, newQty: number) => void;
-  onAddToCart?: (productId: string, quantity: number) => void;
+  onAddToCart?: (
+    productId: string, 
+    quantity: number,
+    customFields?: {
+      unit?: Unit;
+      costPrice?: number;
+      category?: string;
+    }
+  ) => void;
   onRemoveFromCart?: (productId: string) => void;
   onDischargeRecipe?: (recipe: Product) => void;
   categories: string[];
@@ -78,13 +86,19 @@ export const ProductListView: React.FC<ProductListViewProps> = ({
       return !product.isRecipe;
     }
     if (selectedStatusFilter === 'normal') {
-      return product.quantity > product.minStock;
+      return (settings.showMinStock !== false && product.minStock > 0)
+        ? product.quantity > product.minStock
+        : product.quantity > 0;
     }
     if (selectedStatusFilter === 'low') {
-      return product.quantity <= product.minStock && product.quantity > 0;
+      return (settings.showMinStock !== false && product.minStock > 0)
+        ? (product.quantity <= product.minStock && product.quantity > 0)
+        : false;
     }
     if (selectedStatusFilter === 'buy') {
-      return product.quantity <= 0 || product.quantity <= product.minStock;
+      return (settings.showMinStock !== false && product.minStock > 0)
+        ? (product.quantity <= 0 || product.quantity <= product.minStock)
+        : product.quantity <= 0;
     }
     if (selectedStatusFilter === 'high_velocity') {
       return product.velocityClass === 'high';
@@ -118,11 +132,11 @@ export const ProductListView: React.FC<ProductListViewProps> = ({
     if (product.quantity <= 0) {
       return (
         <span className="inline-flex items-center gap-1 bg-rose-100 text-rose-800 border border-rose-300 font-bold px-2.5 py-1 rounded-full text-xs">
-          🔴 COMPRAR (ZERADO)
+          🔴 ZERADO
         </span>
       );
     }
-    if (product.quantity <= product.minStock) {
+    if (settings.showMinStock !== false && product.minStock > 0 && product.quantity <= product.minStock) {
       return (
         <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 border border-amber-300 font-bold px-2.5 py-1 rounded-full text-xs">
           🟡 ESTOQUE BAIXO
@@ -131,7 +145,7 @@ export const ProductListView: React.FC<ProductListViewProps> = ({
     }
     return (
       <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold px-2.5 py-1 rounded-full text-xs">
-        🟢 ESTOQUE NORMAL
+        🟢 EM ESTOQUE
       </span>
     );
   };
@@ -430,9 +444,11 @@ export const ProductListView: React.FC<ProductListViewProps> = ({
                         <p className="text-2xl font-black text-slate-900 mt-0.5">
                           {product.quantity} <span className="text-xs font-semibold text-slate-500">{product.unit}</span>
                         </p>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                          Mínimo: <span className="font-semibold text-slate-700">{product.minStock} {product.unit}</span>
-                        </p>
+                        {settings.showMinStock !== false && product.minStock > 0 && (
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            Mínimo: <span className="font-semibold text-slate-700">{product.minStock} {product.unit}</span>
+                          </p>
+                        )}
                       </div>
 
                       {/* Quick Qty Incrementor */}
@@ -582,10 +598,11 @@ export const ProductListView: React.FC<ProductListViewProps> = ({
         isOpen={!!productForCart}
         product={productForCart}
         currentPurchaseItem={productForCart ? shoppingList.find(i => i.productId === productForCart.id) : null}
+        availableCategories={categories}
         onClose={() => setProductForCart(null)}
-        onAddToCart={(productId, quantity) => {
+        onAddToCart={(productId, quantity, customFields) => {
           if (onAddToCart) {
-            onAddToCart(productId, quantity);
+            onAddToCart(productId, quantity, customFields);
           }
         }}
         onRemoveFromCart={(productId) => {

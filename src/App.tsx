@@ -5,7 +5,9 @@ import {
   SystemSettings, 
   PurchaseItem, 
   TabType,
-  RecipeSaleRecord
+  RecipeSaleRecord,
+  Unit,
+  DEFAULT_CATEGORIES
 } from './types';
 import { StorageService } from './services/storageService';
 import { PdfService } from './services/pdfService';
@@ -22,6 +24,10 @@ import { ProductModal } from './components/ProductModal';
 import { RecipeModal } from './components/RecipeModal';
 import { SettingsModal } from './components/SettingsModal';
 import { RecipeDischargeModal } from './components/RecipeDischargeModal';
+import { AuthModal } from './components/AuthModal';
+import { SupabaseAuthService } from './services/supabaseAuthService';
+import { SupabaseSyncService, UserAppDataPayload } from './services/supabaseSyncService';
+import { FirebaseAuthService } from './services/firebaseAuthService';
 
 export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -30,6 +36,11 @@ export default function App() {
   const [settings, setSettings] = useState<SystemSettings>(StorageService.getSettings());
   const [shoppingList, setShoppingList] = useState<PurchaseItem[]>([]);
   const [currentTab, setCurrentTab] = useState<TabType>('dashboard');
+
+  // Supabase Auth & Cloud Sync State
+  const [currentUser, setCurrentUser] = useState<{ id?: string; email?: string | null; displayName?: string | null } | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // Modals state
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
@@ -55,11 +66,126 @@ export default function App() {
 
     const generatedShopping = StorageService.generateShoppingList(loadedProducts, loadedSettings);
     setShoppingList(generatedShopping);
+
+    return {
+      products: loadedProducts,
+      audits: loadedAudits,
+      recipeSales: loadedRecipeSales,
+      settings: loadedSettings,
+      purchases: StorageService.getPurchases()
+    };
+  };
+
+  // Sync state to cloud
+  const syncToCloud = async (overrideUser?: { id?: string }) => {
+    const userToSync = overrideUser || currentUser;
+    if (!userToSync || !userToSync.id) return;
+
+    try {
+      setIsSyncing(true);
+      const payload: UserAppDataPayload = {
+        products: StorageService.getProducts(),
+        audits: StorageService.getAudits(),
+        purchases: StorageService.getPurchases(),
+        recipeSales: StorageService.getRecipeSales(),
+        settings: StorageService.getSettings()
+      };
+      await SupabaseSyncService.saveAllUserData(userToSync.id, payload);
+    } catch (err) {
+      console.warn('Auto cloud sync notice:', err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Handle user login and sync
+  const handleUserSession = async (userObj: { id: string; email?: string | null; displayName?: string | null }, isNewAccount: boolean = false) => {
+    setCurrentUser(userObj);
+    try {
+      setIsSyncing(true);
+      const localData: UserAppDataPayload = {
+        products: StorageService.getProducts(),
+        audits: StorageService.getAudits(),
+        purchases: StorageService.getPurchases(),
+        recipeSales: StorageService.getRecipeSales(),
+        settings: StorageService.getSettings()
+      };
+
+      const synced = await SupabaseSyncService.syncOnLogin(userObj.id, localData, isNewAccount);
+      
+      // Update local storage and app state cleanly
+      StorageService.saveProducts(synced.products || []);
+      setProducts(synced.products || []);
+
+      StorageService.saveAudits(synced.audits || []);
+      setAudits(synced.audits || []);
+
+      StorageService.savePurchases(synced.purchases || []);
+      setShoppingList(synced.purchases || []);
+
+      StorageService.saveRecipeSales(synced.recipeSales || []);
+      setRecipeSales(synced.recipeSales || []);
+
+      if (synced.settings && synced.settings.appName) {
+        StorageService.saveSettings(synced.settings);
+        setSettings(synced.settings);
+      }
+    } catch (err) {
+      console.warn('Sync on login:', err);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   useEffect(() => {
     loadData();
+
+    // Check Supabase Auth
+    SupabaseAuthService.getCurrentUser().then((user) => {
+      if (user) {
+        handleUserSession({
+          id: user.id,
+          email: user.email,
+          displayName: user.user_metadata?.display_name || user.user_metadata?.full_name || user.email?.split('@')[0]
+        });
+      }
+    });
+
+    // Listen to Supabase Auth State
+    const sub = SupabaseAuthService.onAuthStateChange((_event, session) => {
+      if (session && session.user) {
+        handleUserSession({
+          id: session.user.id,
+          email: session.user.email,
+          displayName: session.user.user_metadata?.display_name || session.user.user_metadata?.full_name || session.user.email?.split('@')[0]
+        });
+      } else {
+        // Check Firebase as fallback
+        const fbUser = FirebaseAuthService.getCurrentUser();
+        if (fbUser) {
+          setCurrentUser({
+            id: fbUser.uid,
+            email: fbUser.email,
+            displayName: fbUser.displayName
+          });
+        } else {
+          setCurrentUser(null);
+        }
+      }
+    });
+
+    return () => {
+      sub.unsubscribe();
+    };
   }, []);
+
+  const handleLogout = async () => {
+    await SupabaseAuthService.logout();
+    await FirebaseAuthService.logout();
+    setCurrentUser(null);
+    StorageService.initializeEmptyUserData();
+    loadData();
+  };
 
   useEffect(() => {
     applyThemeToDom(settings);
@@ -84,7 +210,7 @@ export default function App() {
         category: partialProduct.category || '📦 Outros',
         quantity: partialProduct.quantity ?? 0,
         unit: partialProduct.unit || 'Unidade',
-        minStock: partialProduct.minStock ?? 5,
+        minStock: partialProduct.minStock ?? 0,
         price: partialProduct.price ?? 0,
         costPrice: partialProduct.costPrice,
         sellPrice: partialProduct.sellPrice,
@@ -99,6 +225,7 @@ export default function App() {
     StorageService.saveProducts(updated);
     setProducts(StorageService.getProducts());
     setShoppingList(StorageService.generateShoppingList(updated, settings));
+    syncToCloud();
   };
 
   // Delete product with full cleanup across inventory, check list audits, recipes and shopping cart
@@ -133,6 +260,7 @@ export default function App() {
     setProducts(StorageService.getProducts());
     setAudits(StorageService.getAudits());
     setShoppingList(StorageService.generateShoppingList(cleanedProducts, settings));
+    syncToCloud();
   };
 
   // Quick increment / decrement stock
@@ -141,6 +269,7 @@ export default function App() {
     StorageService.saveProducts(updated);
     setProducts(StorageService.getProducts());
     setShoppingList(StorageService.generateShoppingList(updated, settings));
+    syncToCloud();
   };
 
   // Handle recipe sale deduction (Automatic stock deduction of ingredients)
@@ -148,6 +277,7 @@ export default function App() {
     const result = StorageService.deductRecipeSale(recipeId, quantitySold, notes);
     if (result) {
       loadData();
+      syncToCloud();
     }
   };
 
@@ -176,13 +306,48 @@ export default function App() {
       setShoppingList(StorageService.generateShoppingList(reloadedProds, settings));
     }
 
+    syncToCloud();
     setCurrentTab('dashboard');
   };
 
   // Add or update item in shopping cart
-  const handleAddToCart = (productId: string, quantity: number) => {
+  const handleAddToCart = (
+    productId: string, 
+    quantity: number,
+    customFields?: {
+      unit?: Unit;
+      costPrice?: number;
+      category?: string;
+    }
+  ) => {
     const product = products.find(p => p.id === productId);
     if (!product) return;
+
+    const finalUnit = customFields?.unit || product.unit;
+    const finalCategory = customFields?.category || product.category;
+    const finalCostPrice = customFields?.costPrice !== undefined ? customFields.costPrice : (product.costPrice ?? product.price);
+
+    // If unit, category, or costPrice changed, update the product definition as well
+    if (
+      (customFields?.unit && customFields.unit !== product.unit) ||
+      (customFields?.category && customFields.category !== product.category) ||
+      (customFields?.costPrice !== undefined && customFields.costPrice !== product.costPrice)
+    ) {
+      const updatedProducts = products.map(p => {
+        if (p.id === productId) {
+          return {
+            ...p,
+            unit: finalUnit,
+            category: finalCategory,
+            costPrice: finalCostPrice,
+            price: finalCostPrice
+          };
+        }
+        return p;
+      });
+      setProducts(updatedProducts);
+      StorageService.saveProducts(updatedProducts);
+    }
 
     let updatedList: PurchaseItem[];
     const existingIndex = shoppingList.findIndex(item => item.productId === productId);
@@ -190,21 +355,29 @@ export default function App() {
     if (existingIndex >= 0) {
       updatedList = shoppingList.map((item, idx) => 
         idx === existingIndex
-          ? { ...item, suggestedQuantity: quantity, isPurchased: false }
+          ? { 
+              ...item, 
+              suggestedQuantity: quantity,
+              unit: finalUnit,
+              category: finalCategory,
+              costPrice: finalCostPrice,
+              price: finalCostPrice,
+              isPurchased: false 
+            }
           : item
       );
     } else {
       const newItem: PurchaseItem = {
         productId: product.id,
         productName: product.name,
-        category: product.category,
+        category: finalCategory,
         currentQuantity: product.quantity,
         minStock: product.minStock,
         suggestedQuantity: quantity,
-        unit: product.unit,
-        costPrice: product.costPrice ?? product.price,
+        unit: finalUnit,
+        costPrice: finalCostPrice,
         sellPrice: product.sellPrice,
-        price: product.costPrice ?? product.price,
+        price: finalCostPrice,
         isPurchased: false
       };
       updatedList = [newItem, ...shoppingList];
@@ -212,6 +385,7 @@ export default function App() {
 
     setShoppingList(updatedList);
     StorageService.savePurchases(updatedList);
+    syncToCloud();
   };
 
   // Remove item from shopping cart
@@ -219,17 +393,19 @@ export default function App() {
     const updatedList = shoppingList.filter(item => item.productId !== productId);
     setShoppingList(updatedList);
     StorageService.savePurchases(updatedList);
+    syncToCloud();
   };
 
   // Update item quantity in shopping cart
   const handleUpdateCartQuantity = (productId: string, quantity: number) => {
     const updatedList = shoppingList.map(item => 
       item.productId === productId
-        ? { ...item, suggestedQuantity: Math.max(1, quantity) }
+        ? { ...item, suggestedQuantity: Math.max(0.01, quantity) }
         : item
     );
     setShoppingList(updatedList);
     StorageService.savePurchases(updatedList);
+    syncToCloud();
   };
 
   // Toggle purchased checkbox in shopping list
@@ -247,6 +423,7 @@ export default function App() {
 
     setShoppingList(updatedList);
     StorageService.savePurchases(updatedList);
+    syncToCloud();
   };
 
   // Save system settings
@@ -254,6 +431,7 @@ export default function App() {
     setSettings(newSettings);
     StorageService.saveSettings(newSettings);
     setShoppingList(StorageService.generateShoppingList(products, newSettings));
+    syncToCloud();
   };
 
   // Export PDF Handlers
@@ -302,13 +480,26 @@ export default function App() {
     setShoppingList([]);
   };
 
+  const handleAddCategory = (newCat: string) => {
+    const trimmed = newCat.trim();
+    if (!trimmed) return;
+    const existing = settings.categoryOrder || DEFAULT_CATEGORIES;
+    if (!existing.includes(trimmed)) {
+      const updatedSettings = {
+        ...settings,
+        categoryOrder: [...existing, trimmed]
+      };
+      handleSaveSettings(updatedSettings);
+    }
+  };
+
   const pendingAuditCount = latestAudit
     ? latestAudit.items.filter(i => !i.isAudited).length
     : products.length;
 
   const pendingShoppingCount = shoppingList.filter(s => !s.isPurchased).length;
 
-  const categories = Array.from(new Set(products.map(p => p.category)));
+  const categories = StorageService.getOrderedCategories(settings, products.map(p => p.category));
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-950 flex flex-col lg:flex-row font-sans text-slate-800 dark:text-slate-100 transition-colors">
@@ -331,6 +522,10 @@ export default function App() {
         }}
         appName={settings.appName}
         settings={settings}
+        currentUser={currentUser}
+        onOpenAuthModal={() => setIsAuthModalOpen(true)}
+        onLogout={handleLogout}
+        isSyncing={isSyncing}
       />
 
       {/* Main Content Area */}
@@ -417,6 +612,7 @@ export default function App() {
             onAddToCart={handleAddToCart}
             onExportPDF={handleExportShoppingPDF}
             categories={categories}
+            onAddCategory={handleAddCategory}
           />
         )}
 
@@ -491,6 +687,26 @@ export default function App() {
         onRestoreSampleData={handleRestoreSampleData}
         onResetAll={handleResetAll}
         existingCategories={categories}
+        currentUser={currentUser}
+        onOpenAuthModal={() => {
+          setIsSettingsModalOpen(false);
+          setIsAuthModalOpen(true);
+        }}
+        onSyncCloud={() => syncToCloud()}
+        onLogout={handleLogout}
+      />
+
+      {/* Supabase Authentication Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onSuccess={(isNewAccount) => {
+          setIsAuthModalOpen(false);
+          if (isNewAccount) {
+            StorageService.initializeEmptyUserData();
+            loadData();
+          }
+        }}
       />
     </div>
   );

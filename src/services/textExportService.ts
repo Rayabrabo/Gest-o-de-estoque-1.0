@@ -1,4 +1,4 @@
-import { AuditRecord, PurchaseItem, Product, SystemSettings } from '../types';
+import { AuditRecord, PurchaseItem, Product, SystemSettings, ReportExportConfig, DEFAULT_REPORT_CONFIG } from '../types';
 import { StorageService } from './storageService';
 
 /**
@@ -30,15 +30,42 @@ export const stripEmojis = (str: string): string => {
 
 export const TextExportService = {
   /**
-   * Generates formatted text summary of full Inventory following user's exact specification
+   * Generates formatted text summary of full Inventory with customizable filters and columns
    */
-  generateInventoryText(products: Product[], settings?: SystemSettings): string {
+  generateInventoryText(
+    products: Product[], 
+    settings?: SystemSettings, 
+    customConfig?: Partial<ReportExportConfig>
+  ): string {
+    const config: ReportExportConfig = {
+      ...DEFAULT_REPORT_CONFIG,
+      ...(settings?.reportConfig || {}),
+      ...(customConfig || {})
+    };
+
     const company = settings?.companyName;
     const now = new Date();
     const dateStr = now.toLocaleDateString('pt-BR');
     
+    // Filter products based on config
+    let filteredProducts = [...products];
+
+    // Filter recipes/lanches if disabled
+    if (!config.includeRecipes) {
+      filteredProducts = filteredProducts.filter(p => !p.isRecipe && !p.category.includes('Lanches'));
+    }
+
+    // Filter by stock level
+    if (config.stockFilter === 'in_stock') {
+      filteredProducts = filteredProducts.filter(p => p.quantity > 0);
+    } else if (config.stockFilter === 'zero_only') {
+      filteredProducts = filteredProducts.filter(p => p.quantity <= 0);
+    } else if (config.stockFilter === 'critical_only') {
+      filteredProducts = filteredProducts.filter(p => p.quantity <= p.minStock);
+    }
+
     // Sort products by category priority
-    const orderedProducts = StorageService.sortByCategoryOrder(products, settings);
+    const orderedProducts = StorageService.sortByCategoryOrder(filteredProducts, settings);
     const totalCount = orderedProducts.length;
 
     // 1. Cabeçalho
@@ -47,12 +74,21 @@ export const TextExportService = {
       text += `Estabelecimento: ${company}\n`;
     }
     text += `Data: ${dateStr}\n`;
-    text += `Total: ${totalCount} produtos\n\n`;
+    text += `Total: ${totalCount} produtos\n`;
+
+    if (config.stockFilter === 'in_stock') {
+      text += `Filtro: Apenas itens com estoque atual (> 0)\n`;
+    } else if (config.stockFilter === 'critical_only') {
+      text += `Filtro: Apenas itens críticos ou zerados\n`;
+    } else if (config.stockFilter === 'zero_only') {
+      text += `Filtro: Apenas itens zerados\n`;
+    }
+    text += `\n`;
 
     // 2. Estoque Crítico (itens zerados e abaixo do estoque mínimo)
     const criticalItems = orderedProducts.filter(p => p.quantity <= p.minStock);
     
-    if (criticalItems.length > 0) {
+    if (config.includeCriticalSection && criticalItems.length > 0 && config.stockFilter !== 'zero_only') {
       // Sort critical items: zero stock first, then ascending quantity
       const sortedCritical = [...criticalItems].sort((a, b) => {
         if (a.quantity === 0 && b.quantity > 0) return -1;
@@ -61,13 +97,25 @@ export const TextExportService = {
       });
 
       text += `🚨 Estoque crítico — ${sortedCritical.length} itens\n\n`;
-      text += `Produto\tEstoque\tMínimo\n`;
-
-      sortedCritical.forEach(p => {
-        const qtyUnit = `${p.quantity} ${formatUnitAbbrev(p.unit, p.quantity)}`;
-        const minUnit = `${p.minStock} ${formatUnitAbbrev(p.unit, p.minStock)}`;
-        text += `${p.name}\t${qtyUnit}\t${minUnit}\n`;
-      });
+      
+      if (config.showMinStock && config.showQuantity) {
+        text += `Produto\tEstoque\tMínimo\n`;
+        sortedCritical.forEach(p => {
+          const qtyUnit = `${p.quantity} ${formatUnitAbbrev(p.unit, p.quantity)}`;
+          const minUnit = `${p.minStock} ${formatUnitAbbrev(p.unit, p.minStock)}`;
+          text += `${p.name}\t${qtyUnit}\t${minUnit}\n`;
+        });
+      } else if (config.showQuantity) {
+        text += `Produto\tEstoque\n`;
+        sortedCritical.forEach(p => {
+          const qtyUnit = `${p.quantity} ${formatUnitAbbrev(p.unit, p.quantity)}`;
+          text += `${p.name}\t${qtyUnit}\n`;
+        });
+      } else {
+        sortedCritical.forEach(p => {
+          text += `* ${p.name}\n`;
+        });
+      }
       text += `\n`;
     }
 
@@ -84,15 +132,38 @@ export const TextExportService = {
       categoryMap.get(cat)!.push(p);
     });
 
+    let totalInventoryValue = 0;
+
     // Output each category with products
     categoryMap.forEach((items, category) => {
       text += `${category}\n\n`;
       items.forEach(p => {
-        const qtyUnit = `${p.quantity} ${formatUnitAbbrev(p.unit, p.quantity)}`;
-        text += `* ${p.name} — ${qtyUnit}\n`;
+        const costPrice = p.costPrice ?? p.price ?? 0;
+        totalInventoryValue += (p.quantity * costPrice);
+
+        let line = `* ${p.name}`;
+        
+        if (config.showQuantity) {
+          const qtyUnit = `${p.quantity} ${formatUnitAbbrev(p.unit, p.quantity)}`;
+          line += ` — ${qtyUnit}`;
+        }
+
+        if (config.showMinStock && p.minStock > 0) {
+          line += ` (Mín: ${p.minStock} ${formatUnitAbbrev(p.unit, p.minStock)})`;
+        }
+
+        if (config.showCostPrice && costPrice > 0) {
+          line += ` | Custo: R$ ${costPrice.toFixed(2).replace('.', ',')}`;
+        }
+
+        text += `${line}\n`;
       });
       text += `\n`;
     });
+
+    if (config.showTotalValue && totalInventoryValue > 0 && config.showCostPrice) {
+      text += `💵 VALOR ESTIMADO TOTAL DO ESTOQUE: R$ ${totalInventoryValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n`;
+    }
 
     return text.trim();
   },
@@ -100,7 +171,17 @@ export const TextExportService = {
   /**
    * Generates formatted text for Daily Audit / Conferência
    */
-  generateAuditText(audit: AuditRecord, settings?: SystemSettings): string {
+  generateAuditText(
+    audit: AuditRecord, 
+    settings?: SystemSettings,
+    customConfig?: Partial<ReportExportConfig>
+  ): string {
+    const config: ReportExportConfig = {
+      ...DEFAULT_REPORT_CONFIG,
+      ...(settings?.reportConfig || {}),
+      ...(customConfig || {})
+    };
+
     const company = settings?.companyName;
     const dateStr = audit.date || new Date().toLocaleDateString('pt-BR');
     const timeStr = audit.time || new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -113,11 +194,25 @@ export const TextExportService = {
     text += `Total de Produtos: ${audit.totalProducts} | Conferidos: ${audit.auditedCount}\n`;
     text += `Status: ${audit.appliedToStock ? 'Estoque Atualizado no Sistema' : 'Salvo sem alterar estoque'}\n\n`;
 
+    // Filter items if recipes excluded
+    let displayItems = [...audit.items];
+    if (!config.includeRecipes) {
+      displayItems = displayItems.filter(i => !i.category.includes('Lanches'));
+    }
+
     // Divergências
-    if (audit.changes && audit.changes.length > 0) {
-      text += `🚨 Divergências Encontradas — ${audit.changes.length} itens\n\n`;
+    const relevantChanges = audit.changes?.filter(c => {
+      if (!config.includeRecipes) {
+        const item = audit.items.find(i => i.productId === c.productId);
+        if (item && item.category.includes('Lanches')) return false;
+      }
+      return true;
+    }) || [];
+
+    if (relevantChanges.length > 0) {
+      text += `🚨 Divergências Encontradas — ${relevantChanges.length} itens\n\n`;
       text += `Produto\tSistema\tContado\tDiferença\n`;
-      audit.changes.forEach(c => {
+      relevantChanges.forEach(c => {
         const sign = c.diff > 0 ? '+' : '';
         const oldU = `${c.oldQty} ${formatUnitAbbrev(c.unit, c.oldQty)}`;
         const newU = `${c.newQty} ${formatUnitAbbrev(c.unit, c.newQty)}`;
@@ -131,8 +226,8 @@ export const TextExportService = {
 
     // Itens por categoria
     text += `📋 Estoque conferido por categoria\n\n`;
-    const categoryMap = new Map<string, typeof audit.items>();
-    audit.items.forEach(item => {
+    const categoryMap = new Map<string, typeof displayItems>();
+    displayItems.forEach(item => {
       const cat = item.category || 'Outros';
       if (!categoryMap.has(cat)) {
         categoryMap.set(cat, []);
@@ -144,9 +239,14 @@ export const TextExportService = {
       text += `${category}\n\n`;
       items.forEach(i => {
         const count = i.countedQuantity ?? i.registeredQuantity;
-        const countStr = `${count} ${formatUnitAbbrev(i.unit, count)}`;
+        let line = `* ${i.productName}`;
+        if (config.showQuantity) {
+          const countStr = `${count} ${formatUnitAbbrev(i.unit, count)}`;
+          line += ` — ${countStr}`;
+        }
         const statusTag = i.isAudited ? '' : ' (Pendente)';
-        text += `* ${i.productName} — ${countStr}${statusTag}\n`;
+        line += statusTag;
+        text += `${line}\n`;
       });
       text += `\n`;
     });
@@ -199,7 +299,7 @@ export const TextExportService = {
 
         let priceText = '';
         if (showPrices && costPrice > 0) {
-          priceText = ` | Custo: R$ ${costPrice.toFixed(2)} un (Subtotal: R$ ${subtotal.toFixed(2)})`;
+          priceText = ` | Custo: R$ ${costPrice.toFixed(2).replace('.', ',')} un (Subtotal: R$ ${subtotal.toFixed(2).replace('.', ',')})`;
         }
 
         text += `* ${item.productName} — Comprar ${buyStr} (Atual: ${curStr} | Mín: ${minStr})${priceText}\n`;

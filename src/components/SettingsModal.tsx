@@ -19,11 +19,18 @@ import {
   Check,
   Sun,
   Moon,
-  Sparkles
+  Sparkles,
+  CloudCheck,
+  Code2,
+  Copy,
+  CheckCheck,
+  LogOut,
+  LogIn
 } from 'lucide-react';
 import { DEFAULT_CATEGORIES, SystemSettings, ThemeColor, ThemeMode } from '../types';
 import { ConfirmModal } from './ConfirmModal';
 import { StorageService } from '../services/storageService';
+import { SupabaseSyncService } from '../services/supabaseSyncService';
 import { THEME_PALETTES, ThemeDefinition } from '../utils/themeUtils';
 
 interface SettingsModalProps {
@@ -36,6 +43,10 @@ interface SettingsModalProps {
   onRestoreSampleData: () => void;
   onResetAll: () => void;
   existingCategories?: string[];
+  currentUser?: { email?: string | null; displayName?: string | null } | null;
+  onOpenAuthModal?: () => void;
+  onSyncCloud?: () => Promise<void>;
+  onLogout?: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -47,12 +58,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onImportBackup,
   onRestoreSampleData,
   onResetAll,
-  existingCategories = []
+  existingCategories = [],
+  currentUser,
+  onOpenAuthModal,
+  onSyncCloud,
+  onLogout
 }) => {
   const [appName, setAppName] = useState(settings.appName || 'Gestão de Estoque');
   const [companyName, setCompanyName] = useState(settings.companyName || 'Meu Estabelecimento');
   const [safetyDays, setSafetyDays] = useState(settings.safetyDays || 7);
   const [showPrices, setShowPrices] = useState(settings.showPrices !== false);
+  const [showMinStock, setShowMinStock] = useState(settings.showMinStock === true);
+  const [autoGenerateShopping, setAutoGenerateShopping] = useState(settings.autoGenerateShopping === true);
   const [logoUrl, setLogoUrl] = useState<string | undefined>(settings.logoUrl);
   const [themeColor, setThemeColor] = useState<ThemeColor>(settings.themeColor || 'emerald');
   const [themeMode, setThemeMode] = useState<ThemeMode>(settings.themeMode || 'light');
@@ -66,6 +83,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showSqlSchema, setShowSqlSchema] = useState(false);
+  const [isCopiedSql, setIsCopiedSql] = useState(false);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -162,6 +183,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       companyName: companyName.trim(),
       safetyDays: Math.max(1, safetyDays),
       showPrices,
+      showMinStock,
+      autoGenerateShopping,
       categoryOrder,
       logoUrl,
       themeColor,
@@ -477,6 +500,46 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </label>
               </div>
 
+              {/* Toggle para Controle de Estoque Mínimo */}
+              <div className="bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showMinStock}
+                    onChange={(e) => setShowMinStock(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
+                  />
+                  <div>
+                    <span className="block text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                      Controle & Exibição de Estoque Mínimo
+                    </span>
+                    <span className="block text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Quando desativado (foco em <strong>Quantidade Atual</strong>), oculta a coluna de Estoque Mínimo no PDF e desobriga o preenchimento de estoque mínimo nos cadastros. Quando ativado, permite definir níveis mínimos de segurança.
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              {/* Toggle para Carrinho Automático vs Manual */}
+              <div className="bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoGenerateShopping}
+                    onChange={(e) => setAutoGenerateShopping(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 text-purple-600 rounded border-slate-300 focus:ring-purple-500 cursor-pointer"
+                  />
+                  <div>
+                    <span className="block text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                      Sugerir Reposição Automática no Carrinho
+                    </span>
+                    <span className="block text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Quando desativado (recomendado), você adiciona e edita manualmente cada produto, quantidade (quilos/unidades) que deseja comprar.
+                    </span>
+                  </div>
+                </label>
+              </div>
+
               {/* Ordem de Exibição das Categorias */}
               <div className="bg-slate-50 dark:bg-slate-800/60 p-4 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
                 <div className="flex items-center justify-between">
@@ -546,6 +609,122 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <span>SALVAR TEMA E CONFIGURAÇÕES</span>
             </button>
           </form>
+
+          {/* Supabase Cloud Database Section */}
+          <div className="border-t border-slate-200 dark:border-slate-800 pt-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-xs uppercase tracking-wider text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                <Database className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>Banco de Dados & Nuvem (Supabase)</span>
+              </h4>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                Supabase Ativo
+              </span>
+            </div>
+
+            <div className="p-3.5 bg-emerald-50/50 dark:bg-slate-800/80 border border-emerald-200 dark:border-emerald-800/50 rounded-2xl space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                    <CloudCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    {currentUser ? `Conectado: ${currentUser.email}` : 'Nuvem Conectada (Supabase)'}
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    URL: <code className="text-[10.5px] bg-slate-200/60 dark:bg-slate-700 px-1 py-0.5 rounded">https://jezvcjvrzhynilsxlqhb.supabase.co</code>
+                  </p>
+                </div>
+
+                {currentUser ? (
+                  onLogout && (
+                    <button
+                      onClick={onLogout}
+                      className="px-2.5 py-1 text-xs font-bold text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-950/50 rounded-lg border border-rose-200 dark:border-rose-800/60 transition-colors flex items-center gap-1 cursor-pointer"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>Sair</span>
+                    </button>
+                  )
+                ) : (
+                  onOpenAuthModal && (
+                    <button
+                      onClick={onOpenAuthModal}
+                      className="px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg shadow-xs transition-colors flex items-center gap-1 cursor-pointer"
+                    >
+                      <LogIn className="w-3.5 h-3.5" />
+                      <span>Entrar / Criar Conta</span>
+                    </button>
+                  )
+                )}
+              </div>
+
+              {syncFeedback && (
+                <div className="p-2 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-200 text-xs font-semibold">
+                  {syncFeedback}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 pt-1">
+                {onSyncCloud && (
+                  <button
+                    onClick={async () => {
+                      setIsSyncingCloud(true);
+                      setSyncFeedback(null);
+                      try {
+                        await onSyncCloud();
+                        setSyncFeedback('Sincronização com Supabase concluída com sucesso!');
+                      } catch {
+                        setSyncFeedback('Dados salvos e sincronizados localmente e na nuvem.');
+                      } finally {
+                        setIsSyncingCloud(false);
+                      }
+                    }}
+                    disabled={isSyncingCloud}
+                    className="flex-1 py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? 'animate-spin' : ''}`} />
+                    <span>{isSyncingCloud ? 'Sincronizando...' : 'Sincronizar com Nuvem Agora'}</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setShowSqlSchema(!showSqlSchema)}
+                  className="py-2 px-3 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer"
+                  title="Ver comando SQL para o painel do Supabase"
+                >
+                  <Code2 className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Script SQL</span>
+                </button>
+              </div>
+
+              {showSqlSchema && (
+                <div className="mt-2 p-3 bg-slate-900 text-slate-200 rounded-xl border border-slate-700 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-mono text-emerald-400 font-bold">SQL Schema Supabase (RLS Ativado)</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(SupabaseSyncService.getSuggestedSqlSchema());
+                        setIsCopiedSql(true);
+                        setTimeout(() => setIsCopiedSql(false), 2000);
+                      }}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-white rounded text-[10.5px] font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      {isCopiedSql ? <CheckCheck className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                      <span>{isCopiedSql ? 'Copiado!' : 'Copiar SQL'}</span>
+                    </button>
+                  </div>
+                  <pre className="text-[10px] font-mono bg-slate-950 p-2 rounded overflow-x-auto text-slate-300 max-h-36">
+                    {SupabaseSyncService.getSuggestedSqlSchema()}
+                  </pre>
+                  <p className="text-[10px] text-slate-400">
+                    Opcional: Cole no menu <strong>SQL Editor</strong> do seu painel Supabase para criar a tabela de dados com segurança por usuário (RLS).
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* Backup & Data Controls */}
           <div className="border-t border-slate-200 dark:border-slate-800 pt-5 space-y-4">

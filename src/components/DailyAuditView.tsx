@@ -17,14 +17,16 @@ import {
   Circle,
   ShoppingCart,
   Download,
-  FileText
+  FileText,
+  SlidersHorizontal
 } from 'lucide-react';
-import { Product, AuditRecord, AuditItem, SystemSettings, PurchaseItem } from '../types';
+import { Product, AuditRecord, AuditItem, SystemSettings, PurchaseItem, ReportExportConfig, Unit } from '../types';
 import { TextExportService } from '../services/textExportService';
 import { PdfService } from '../services/pdfService';
 import { StorageService } from '../services/storageService';
 import { WhatsAppShareModal } from './WhatsAppShareModal';
 import { AddToCartModal } from './AddToCartModal';
+import { ReportConfigModal } from './ReportConfigModal';
 
 interface DailyAuditViewProps {
   products: Product[];
@@ -33,7 +35,15 @@ interface DailyAuditViewProps {
   shoppingList?: PurchaseItem[];
   onSaveAudit: (audit: AuditRecord, applyToStock: boolean) => void;
   onResetAudit?: () => void;
-  onAddToCart?: (productId: string, quantity: number) => void;
+  onAddToCart?: (
+    productId: string, 
+    quantity: number,
+    customFields?: {
+      unit?: Unit;
+      costPrice?: number;
+      category?: string;
+    }
+  ) => void;
   onRemoveFromCart?: (productId: string) => void;
   onNavigateToReports?: () => void;
 }
@@ -48,22 +58,65 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
   onRemoveFromCart,
   onNavigateToReports
 }) => {
-  const [auditItems, setAuditItems] = useState<AuditItem[]>([]);
+  // Helper to build initial audit items merging draft with active products
+  const buildInitialAuditItems = (): AuditItem[] => {
+    const sortedProducts = StorageService.sortByCategoryOrder(products, settings);
+    const draft = StorageService.getAuditDraft() || [];
+
+    return sortedProducts.map(p => {
+      const existing = draft.find(item => item.productId === p.id);
+      const costPrice = p.costPrice ?? p.price;
+      const sellPrice = p.sellPrice;
+
+      if (existing) {
+        return {
+          ...existing,
+          productName: p.name,
+          category: p.category,
+          unit: p.unit,
+          registeredQuantity: p.quantity,
+          minStock: p.minStock,
+          price: costPrice,
+          costPrice,
+          sellPrice
+        };
+      }
+
+      return {
+        productId: p.id,
+        productName: p.name,
+        category: p.category,
+        unit: p.unit,
+        registeredQuantity: p.quantity,
+        countedQuantity: p.quantity,
+        isAudited: false,
+        minStock: p.minStock,
+        price: costPrice,
+        costPrice,
+        sellPrice
+      };
+    });
+  };
+
+  const [auditItems, setAuditItems] = useState<AuditItem[]>(buildInitialAuditItems);
   const [showFinalizeModal, setShowFinalizeModal] = useState(false);
   const [shareText, setShareText] = useState<string | null>(null);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'audited'>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [productForCart, setProductForCart] = useState<Product | null>(null);
   const [lastSavedRecord, setLastSavedRecord] = useState<AuditRecord | null>(null);
 
-  // Synchronize audit items strictly with active products in category priority order
+  // Synchronize audit items strictly with active products in category priority order while preserving counts
   useEffect(() => {
     const sortedProducts = StorageService.sortByCategoryOrder(products, settings);
+    const draft = StorageService.getAuditDraft();
 
     setAuditItems(prev => {
-      return sortedProducts.map(p => {
-        const existing = prev.find(item => item.productId === p.id);
+      const reference = prev.length > 0 ? prev : (draft || []);
+      const updated = sortedProducts.map(p => {
+        const existing = reference.find(item => item.productId === p.id);
         const costPrice = p.costPrice ?? p.price;
         const sellPrice = p.sellPrice;
         if (existing) {
@@ -93,6 +146,10 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
           sellPrice
         };
       });
+
+      // Persist draft in storage
+      StorageService.saveAuditDraft(updated);
+      return updated;
     });
   }, [products, settings]);
 
@@ -117,8 +174,16 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
     });
   }, [auditItems, statusFilter, selectedCategory]);
 
+  const updateItemsAndDraft = (updater: (prev: AuditItem[]) => AuditItem[]) => {
+    setAuditItems(prev => {
+      const next = updater(prev);
+      StorageService.saveAuditDraft(next);
+      return next;
+    });
+  };
+
   const handleToggleAudited = (productId: string) => {
-    setAuditItems(prev => prev.map(item => {
+    updateItemsAndDraft(prev => prev.map(item => {
       if (item.productId === productId) {
         return {
           ...item,
@@ -131,7 +196,7 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
 
   const handleUpdateCounted = (productId: string, val: number) => {
     const safeVal = isNaN(val) ? 0 : Math.max(0, val);
-    setAuditItems(prev => prev.map(item => {
+    updateItemsAndDraft(prev => prev.map(item => {
       if (item.productId === productId) {
         return {
           ...item,
@@ -144,7 +209,7 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
   };
 
   const handleStepQuantity = (productId: string, delta: number) => {
-    setAuditItems(prev => prev.map(item => {
+    updateItemsAndDraft(prev => prev.map(item => {
       if (item.productId === productId) {
         const current = item.countedQuantity ?? item.registeredQuantity;
         const newQty = Math.max(0, Math.round((current + delta) * 100) / 100);
@@ -159,7 +224,7 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
   };
 
   const handleResetToSystem = (productId: string) => {
-    setAuditItems(prev => prev.map(item => {
+    updateItemsAndDraft(prev => prev.map(item => {
       if (item.productId === productId) {
         return {
           ...item,
@@ -172,14 +237,14 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
   };
 
   const handleMarkAllAudited = () => {
-    setAuditItems(prev => prev.map(item => ({
+    updateItemsAndDraft(prev => prev.map(item => ({
       ...item,
       isAudited: true
     })));
   };
 
   const handleUnmarkAllAudited = () => {
-    setAuditItems(prev => prev.map(item => ({
+    updateItemsAndDraft(prev => prev.map(item => ({
       ...item,
       isAudited: false,
       countedQuantity: item.registeredQuantity
@@ -216,15 +281,16 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
     };
   };
 
-  const handleGenerateAuditPDF = (record?: AuditRecord) => {
+  const handleGenerateAuditPDF = (record?: AuditRecord, customConfig?: Partial<ReportExportConfig>) => {
     const targetRecord = record || lastSavedRecord || createSnapshotRecord(false, false);
-    PdfService.generateAuditReport(targetRecord, products, settings);
+    PdfService.generateAuditReport(targetRecord, products, settings, customConfig);
   };
 
   const handleFinalizeConfirm = (applyToStock: boolean) => {
     const newRecord = createSnapshotRecord(true, applyToStock);
     setLastSavedRecord(newRecord);
     onSaveAudit(newRecord, applyToStock);
+    StorageService.clearAuditDraft(); // Clear in-progress draft after successful completion
     setShowFinalizeModal(false);
 
     // Generate WhatsApp text for easy copying/sharing
@@ -233,9 +299,9 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
     setIsShareModalOpen(true);
   };
 
-  const handleGenerateCurrentText = () => {
+  const handleGenerateCurrentText = (customConfig?: Partial<ReportExportConfig>) => {
     const currentRecord = createSnapshotRecord(false, false);
-    const txt = TextExportService.generateAuditText(currentRecord, settings);
+    const txt = TextExportService.generateAuditText(currentRecord, settings, customConfig);
     setShareText(txt);
     setIsShareModalOpen(true);
   };
@@ -255,6 +321,16 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* Configurações do Relatório */}
+          <button
+            onClick={() => setIsConfigModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs transition-colors cursor-pointer"
+            title="Configurar opções de exibição do PDF e WhatsApp"
+          >
+            <SlidersHorizontal className="w-4 h-4 text-slate-600" />
+            <span className="hidden sm:inline">Configurar</span>
+          </button>
+
           {/* Quick PDF Report button */}
           <button
             onClick={() => handleGenerateAuditPDF()}
@@ -687,6 +763,17 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
         </div>
       )}
 
+      {/* Report Configuration Modal */}
+      {isConfigModalOpen && (
+        <ReportConfigModal
+          isOpen={isConfigModalOpen}
+          onClose={() => setIsConfigModalOpen(false)}
+          settings={settings}
+          onGeneratePDF={(cfg) => handleGenerateAuditPDF(undefined, cfg)}
+          onGenerateWhatsApp={(cfg) => handleGenerateCurrentText(cfg)}
+        />
+      )}
+
       {/* WhatsApp Share Modal */}
       {shareText && (
         <WhatsAppShareModal
@@ -706,8 +793,8 @@ export const DailyAuditView: React.FC<DailyAuditViewProps> = ({
           product={productForCart}
           currentPurchaseItem={shoppingList.find(item => item.productId === productForCart.id)}
           onClose={() => setProductForCart(null)}
-          onAddToCart={(id, qty) => {
-            onAddToCart?.(id, qty);
+          onAddToCart={(id, qty, customFields) => {
+            onAddToCart?.(id, qty, customFields);
             setProductForCart(null);
           }}
           onRemoveFromCart={(id) => {

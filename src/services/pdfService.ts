@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable, { RowInput } from 'jspdf-autotable';
-import { Product, AuditRecord, SystemSettings, PurchaseItem } from '../types';
+import { Product, AuditRecord, SystemSettings, PurchaseItem, ReportExportConfig, DEFAULT_REPORT_CONFIG } from '../types';
 import { StorageService } from './storageService';
 import { getThemeConfig } from '../utils/themeUtils';
 import { formatUnitAbbrev, stripEmojis } from './textExportService';
@@ -25,12 +25,25 @@ export class PdfService {
   /**
    * Generates Clean & Professional Inventory PDF Report (Resumo de Estoque)
    * Strictly without emojis to ensure pure typography and zero visual clutter.
+   * Fully customizable with ReportExportConfig options.
    */
   static generateInventoryReport(
     products: Product[],
     latestAudit: AuditRecord | null,
-    settings: SystemSettings
+    settings: SystemSettings,
+    customConfig?: Partial<ReportExportConfig>
   ): void {
+    const config: ReportExportConfig = {
+      ...DEFAULT_REPORT_CONFIG,
+      ...(settings?.reportConfig || {}),
+      ...(customConfig || {})
+    };
+
+    // Verifica se a exibição do estoque mínimo está ativada nas configurações gerais ou no relatório
+    const shouldShowMinStock = (customConfig?.showMinStock !== undefined)
+      ? !!customConfig.showMinStock
+      : (config.showMinStock === true && settings?.showMinStock === true);
+
     const doc = new jsPDF({
       orientation: 'portrait',
       unit: 'mm',
@@ -42,8 +55,25 @@ export class PdfService {
     const formattedTime = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
     const theme = getThemeConfig(settings);
 
+    // Filter products based on config
+    let filteredProducts = [...products];
+
+    // Filter recipes/lanches if disabled
+    if (!config.includeRecipes) {
+      filteredProducts = filteredProducts.filter(p => !p.isRecipe && !p.category.includes('Lanches'));
+    }
+
+    // Filter by stock level
+    if (config.stockFilter === 'in_stock') {
+      filteredProducts = filteredProducts.filter(p => p.quantity > 0);
+    } else if (config.stockFilter === 'zero_only') {
+      filteredProducts = filteredProducts.filter(p => p.quantity <= 0);
+    } else if (config.stockFilter === 'critical_only') {
+      filteredProducts = filteredProducts.filter(p => shouldShowMinStock ? p.quantity <= p.minStock : p.quantity <= 0);
+    }
+
     // Sort products by user-configured category priority
-    const orderedProducts = StorageService.sortByCategoryOrder(products, settings);
+    const orderedProducts = StorageService.sortByCategoryOrder(filteredProducts, settings);
     const totalProducts = orderedProducts.length;
 
     // 1. Cabeçalho Minimalista & Elegante
@@ -67,53 +97,79 @@ export class PdfService {
     doc.text(`Estabelecimento: ${company}`, 14, 18);
 
     doc.setFontSize(8);
-    doc.text(`Data do relatório: ${formattedDate} às ${formattedTime}`, hasLogo ? 100 : 138, 18);
+    let filterSubtitle = `Data do relatório: ${formattedDate} às ${formattedTime}`;
+    if (config.stockFilter === 'in_stock') {
+      filterSubtitle += ' (Apenas Itens em Estoque)';
+    } else if (config.stockFilter === 'critical_only') {
+      filterSubtitle += shouldShowMinStock ? ' (Apenas Itens Críticos / Baixos)' : ' (Apenas Itens Zerados)';
+    } else if (config.stockFilter === 'zero_only') {
+      filterSubtitle += ' (Apenas Itens Zerados)';
+    }
+    doc.text(filterSubtitle, hasLogo ? 85 : 120, 18);
+
+    let currentY = 30;
 
     // 2. Resumo de Situação (Box de Indicadores)
     const zeroStockItems = orderedProducts.filter(p => p.quantity <= 0);
-    const lowStockItems = orderedProducts.filter(p => p.quantity > 0 && p.quantity <= p.minStock);
-    const normalStockItems = orderedProducts.filter(p => p.quantity > p.minStock);
+    const inStockItems = orderedProducts.filter(p => p.quantity > 0);
+    const lowStockItems = shouldShowMinStock ? orderedProducts.filter(p => p.quantity > 0 && p.quantity <= p.minStock) : [];
+    const normalStockItems = shouldShowMinStock ? orderedProducts.filter(p => p.quantity > p.minStock) : inStockItems;
     const criticalTotal = zeroStockItems.length + lowStockItems.length;
 
-    doc.setFillColor(248, 250, 252); // Slate-50
-    doc.setDrawColor(226, 232, 240); // Slate-200
-    doc.roundedRect(14, 30, 182, 20, 2, 2, 'FD');
+    if (config.includeSummaryBox) {
+      doc.setFillColor(248, 250, 252); // Slate-50
+      doc.setDrawColor(226, 232, 240); // Slate-200
+      doc.roundedRect(14, currentY, 182, 20, 2, 2, 'FD');
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    doc.setTextColor(15, 23, 42);
-    doc.text('RESUMO DE SITUAÇÃO:', 18, 36);
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.text(`Total de produtos: ${totalProducts}`, 18, 42);
-    doc.text(`Estoque normal: ${normalStockItems.length}`, 18, 46);
-
-    // Highlight critical & zeroed stock
-    if (criticalTotal > 0) {
       doc.setFont('helvetica', 'bold');
-      doc.setTextColor(217, 119, 6); // Amber-600
-      doc.text(`Estoque crítico / baixo: ${lowStockItems.length} produtos`, 80, 42);
+      doc.setFontSize(8.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text('RESUMO DE SITUAÇÃO:', 18, currentY + 6);
 
-      doc.setTextColor(225, 29, 72); // Rose-600
-      doc.text(`Produtos zerados: ${zeroStockItems.length} produtos`, 80, 46);
-    } else {
-      doc.setTextColor(5, 150, 105); // Emerald-600
-      doc.text('Nenhum item em estado crítico.', 80, 42);
-    }
-
-    if (settings.showPrices !== false) {
-      const totalEstCost = orderedProducts.reduce((acc, p) => acc + (p.quantity * (p.costPrice ?? p.price ?? 0)), 0);
-      doc.setTextColor(71, 85, 105);
       doc.setFont('helvetica', 'normal');
-      doc.text(`Patrimônio estimado: R$ ${totalEstCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 140, 42);
+      doc.setFontSize(8);
+      doc.text(`Total de produtos listados: ${totalProducts}`, 18, currentY + 12);
+      
+      if (shouldShowMinStock) {
+        doc.text(`Estoque normal: ${normalStockItems.length}`, 18, currentY + 16);
+
+        // Highlight critical & zeroed stock
+        if (criticalTotal > 0) {
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(217, 119, 6); // Amber-600
+          doc.text(`Estoque crítico / baixo: ${lowStockItems.length} produtos`, 82, currentY + 12);
+
+          doc.setTextColor(225, 29, 72); // Rose-600
+          doc.text(`Produtos zerados: ${zeroStockItems.length} produtos`, 82, currentY + 16);
+        } else {
+          doc.setTextColor(5, 150, 105); // Emerald-600
+          doc.text('Nenhum item em estado crítico.', 82, currentY + 12);
+        }
+      } else {
+        doc.text(`Itens com estoque físico: ${inStockItems.length}`, 18, currentY + 16);
+
+        if (zeroStockItems.length > 0) {
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(225, 29, 72); // Rose-600
+          doc.text(`Produtos zerados: ${zeroStockItems.length} produto(s)`, 82, currentY + 12);
+        } else {
+          doc.setTextColor(5, 150, 105); // Emerald-600
+          doc.text('Todos os produtos possuem estoque.', 82, currentY + 12);
+        }
+      }
+
+      if (config.showTotalValue && config.showCostPrice) {
+        const totalEstCost = orderedProducts.reduce((acc, p) => acc + (p.quantity * (p.costPrice ?? p.price ?? 0)), 0);
+        doc.setTextColor(71, 85, 105);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Patrimônio estimado: R$ ${totalEstCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 140, currentY + 12);
+      }
+
+      currentY += 25;
     }
 
-    let currentY = 54;
-
-    // 3. Seção: ESTOQUE CRÍTICO (se houver itens que necessitam reposição)
-    if (criticalTotal > 0) {
-      // Sort: zeroed items first
+    // 3. Seção: ESTOQUE CRÍTICO (se habilitada e configurada com estoque mínimo ou zerados)
+    if (config.includeCriticalSection && criticalTotal > 0 && config.stockFilter !== 'zero_only') {
       const criticalSorted = [...zeroStockItems, ...lowStockItems];
 
       doc.setFont('helvetica', 'bold');
@@ -121,24 +177,31 @@ export class PdfService {
       doc.setTextColor(225, 29, 72); // Rose-600
       doc.text(`ESTOQUE CRÍTICO — ${criticalTotal} ITENS`, 14, currentY + 4);
 
+      // Dynamically define headers and columns based on config
+      const critHead: string[] = ['Produto', 'Categoria'];
+      if (config.showQuantity) critHead.push('Estoque Atual');
+      if (shouldShowMinStock) critHead.push('Estoque Mínimo');
+      if (config.showCostPrice) critHead.push('Preço Custo');
+      if (config.showStatus) critHead.push('Situação');
+
       const criticalTableBody = criticalSorted.map(p => {
         const isZero = p.quantity <= 0;
         const currentQtyStr = `${p.quantity} ${formatUnitAbbrev(p.unit, p.quantity)}`;
         const minQtyStr = `${p.minStock} ${formatUnitAbbrev(p.unit, p.minStock)}`;
         const situacao = isZero ? 'ZERADO (Reposição urgente)' : 'CRÍTICO (Abaixo do mínimo)';
+        const costStr = (p.costPrice ?? p.price ?? 0) > 0 ? `R$ ${(p.costPrice ?? p.price ?? 0).toFixed(2).replace('.', ',')}` : '-';
 
-        return [
-          p.name,
-          stripEmojis(p.category),
-          currentQtyStr,
-          minQtyStr,
-          situacao
-        ];
+        const row: string[] = [p.name, stripEmojis(p.category)];
+        if (config.showQuantity) row.push(currentQtyStr);
+        if (shouldShowMinStock) row.push(minQtyStr);
+        if (config.showCostPrice) row.push(costStr);
+        if (config.showStatus) row.push(situacao);
+        return row;
       });
 
       autoTable(doc, {
         startY: currentY + 6,
-        head: [['Produto', 'Categoria', 'Estoque Atual', 'Estoque Mínimo', 'Situação']],
+        head: [critHead],
         body: criticalTableBody,
         theme: 'grid',
         headStyles: {
@@ -152,21 +215,15 @@ export class PdfService {
           cellPadding: 2,
           textColor: [15, 23, 42]
         },
-        columnStyles: {
-          0: { cellWidth: 55 },
-          1: { cellWidth: 38 },
-          2: { cellWidth: 26, halign: 'right' },
-          3: { cellWidth: 26, halign: 'right' },
-          4: { cellWidth: 37 }
-        },
         didParseCell: (data) => {
           if (data.section === 'body') {
-            const rawText = String(data.row.raw[4] || '');
-            if (rawText.includes('ZERADO')) {
+            const rowArr = data.row.raw as string[];
+            const lastCell = String(rowArr[rowArr.length - 1] || '');
+            if (lastCell.includes('ZERADO')) {
               data.cell.styles.fillColor = [255, 241, 242]; // Rose-50
               data.cell.styles.textColor = [225, 29, 72]; // Rose-600
               data.cell.styles.fontStyle = 'bold';
-            } else if (rawText.includes('CRÍTICO')) {
+            } else if (lastCell.includes('CRÍTICO')) {
               data.cell.styles.textColor = [217, 119, 6]; // Amber-600
               data.cell.styles.fontStyle = 'bold';
             }
@@ -178,8 +235,7 @@ export class PdfService {
     }
 
     // 4. Seção: ESTOQUE COMPLETO (Organizado por Categoria sem Emojis)
-    // If table approaches bottom, start new page cleanly
-    if (currentY > 240) {
+    if (currentY > 235) {
       doc.addPage();
       currentY = 20;
     }
@@ -199,6 +255,16 @@ export class PdfService {
       categoryMap.get(cleanCat)!.push(p);
     });
 
+    // Build dynamic table headers based on config
+    const tableHead: string[] = ['Produto'];
+    if (config.showQuantity) tableHead.push('Qtd em Estoque');
+    if (shouldShowMinStock) tableHead.push('Estoque Mínimo');
+    if (config.showCostPrice) tableHead.push('Preço Custo');
+    if (config.showCostPrice && config.showQuantity) tableHead.push('Subtotal Custo');
+    if (config.showStatus) tableHead.push('Situação');
+
+    const totalColumns = tableHead.length;
+
     // Build unified table rows with category divider rows
     const fullTableBody: RowInput[] = [];
 
@@ -207,7 +273,7 @@ export class PdfService {
       fullTableBody.push([
         {
           content: `${categoryName} (${items.length} ${items.length === 1 ? 'item' : 'itens'})`,
-          colSpan: 4,
+          colSpan: totalColumns,
           styles: {
             fillColor: [241, 245, 249], // Slate-100
             textColor: [15, 23, 42],
@@ -221,25 +287,31 @@ export class PdfService {
       items.forEach(p => {
         const qtyFormatted = `${p.quantity} ${formatUnitAbbrev(p.unit, p.quantity)}`;
         const minFormatted = `${p.minStock} ${formatUnitAbbrev(p.unit, p.minStock)}`;
+        const costVal = p.costPrice ?? p.price ?? 0;
+        const costFormatted = costVal > 0 ? `R$ ${costVal.toFixed(2).replace('.', ',')}` : '-';
+        const subtotalFormatted = (costVal > 0 && p.quantity > 0) ? `R$ ${(costVal * p.quantity).toFixed(2).replace('.', ',')}` : '-';
+
         let situacao = 'Normal';
         if (p.quantity <= 0) {
           situacao = 'Zerado';
-        } else if (p.quantity <= p.minStock) {
+        } else if (shouldShowMinStock && p.quantity <= p.minStock) {
           situacao = 'Estoque Baixo';
         }
 
-        fullTableBody.push([
-          p.name,
-          qtyFormatted,
-          minFormatted,
-          situacao
-        ]);
+        const row: (string | object)[] = [p.name];
+        if (config.showQuantity) row.push(qtyFormatted);
+        if (shouldShowMinStock) row.push(minFormatted);
+        if (config.showCostPrice) row.push(costFormatted);
+        if (config.showCostPrice && config.showQuantity) row.push(subtotalFormatted);
+        if (config.showStatus) row.push(situacao);
+
+        fullTableBody.push(row);
       });
     });
 
     autoTable(doc, {
       startY: currentY + 5,
-      head: [['Produto', 'Quantidade em Estoque', 'Estoque Mínimo', 'Situação']],
+      head: [tableHead],
       body: fullTableBody,
       theme: 'grid',
       headStyles: {
@@ -253,21 +325,15 @@ export class PdfService {
         cellPadding: 2,
         textColor: [15, 23, 42]
       },
-      columnStyles: {
-        0: { cellWidth: 80 },
-        1: { cellWidth: 36, halign: 'right' },
-        2: { cellWidth: 36, halign: 'right' },
-        3: { cellWidth: 30 }
-      },
       didParseCell: (data) => {
-        if (data.section === 'body') {
-          // If not category header
-          const rawSit = String(data.row.raw[3] || '');
-          if (rawSit === 'Zerado') {
+        if (data.section === 'body' && config.showStatus) {
+          const rowArr = data.row.raw as (string | object)[];
+          const lastCell = String(rowArr[rowArr.length - 1] || '');
+          if (lastCell === 'Zerado') {
             data.cell.styles.fillColor = [255, 241, 242];
             data.cell.styles.textColor = [225, 29, 72];
             data.cell.styles.fontStyle = 'bold';
-          } else if (rawSit === 'Estoque Baixo') {
+          } else if (lastCell === 'Estoque Baixo') {
             data.cell.styles.textColor = [217, 119, 6];
             data.cell.styles.fontStyle = 'bold';
           }
@@ -275,7 +341,27 @@ export class PdfService {
       }
     });
 
-    // 5. Rodapé Padrão em Todas as Páginas
+    // 5. Totalizador financeiro se habilitado
+    if (config.showTotalValue && config.showCostPrice) {
+      const grandTotal = orderedProducts.reduce((acc, p) => acc + (p.quantity * (p.costPrice ?? p.price ?? 0)), 0);
+      const finalY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY || 150;
+
+      if (finalY > 260) {
+        doc.addPage();
+      }
+
+      doc.setFillColor(248, 250, 252);
+      doc.setDrawColor(226, 232, 240);
+      doc.roundedRect(14, finalY + 4, 182, 12, 2, 2, 'FD');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text('VALOR TOTAL ESTIMADO DO ESTOQUE (CUSTO):', 20, finalY + 11);
+      doc.text(`R$ ${grandTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 140, finalY + 11);
+    }
+
+    // 6. Rodapé Padrão em Todas as Páginas
     const pageCount = doc.getNumberOfPages();
     for (let i = 1; i <= pageCount; i++) {
       doc.setPage(i);
@@ -298,8 +384,15 @@ export class PdfService {
   static generateAuditReport(
     audit: AuditRecord,
     products: Product[],
-    settings: SystemSettings
+    settings: SystemSettings,
+    customConfig?: Partial<ReportExportConfig>
   ): void {
+    const config: ReportExportConfig = {
+      ...DEFAULT_REPORT_CONFIG,
+      ...(settings?.reportConfig || {}),
+      ...(customConfig || {})
+    };
+
     const doc = new jsPDF({
       orientation: 'portrait',
       unit: 'mm',
@@ -334,11 +427,17 @@ export class PdfService {
     doc.setFontSize(8);
     doc.text(`Data: ${formattedDate} às ${formattedTime}`, hasLogo ? 100 : 138, 18);
 
+    // Filter items if recipes excluded
+    let auditItems = [...audit.items];
+    if (!config.includeRecipes) {
+      auditItems = auditItems.filter(i => !i.category.includes('Lanches'));
+    }
+
     // Summary Box
-    const totalItems = audit.totalProducts || audit.items.length;
-    const auditedItems = audit.auditedCount || audit.items.filter(i => i.isAudited).length;
+    const totalItems = auditItems.length;
+    const auditedItems = auditItems.filter(i => i.isAudited).length;
     const pendingItems = totalItems - auditedItems;
-    const changesCount = audit.changes?.length || audit.items.filter(i => i.isAudited && i.countedQuantity !== null && i.countedQuantity !== i.registeredQuantity).length;
+    const changesCount = auditItems.filter(i => i.isAudited && i.countedQuantity !== null && i.countedQuantity !== i.registeredQuantity).length;
 
     doc.setFillColor(248, 250, 252);
     doc.setDrawColor(226, 232, 240);
@@ -356,7 +455,7 @@ export class PdfService {
     doc.text(`• Aplicado ao Estoque: ${audit.appliedToStock ? 'SIM (Estoque Atualizado)' : 'NÃO (Apenas Registro)'}`, 85, 48);
 
     // Sort audit items using user's category priority
-    const categorySortedItems = [...audit.items].sort((a, b) => {
+    const categorySortedItems = [...auditItems].sort((a, b) => {
       const catOrder = settings.categoryOrder || [];
       const cleanA = stripEmojis(a.category);
       const cleanB = stripEmojis(b.category);

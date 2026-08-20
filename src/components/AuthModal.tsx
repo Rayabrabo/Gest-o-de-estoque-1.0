@@ -12,14 +12,16 @@ import {
   Sparkles,
   ShieldCheck,
   CheckCircle2,
-  Boxes
+  Boxes,
+  Database
 } from 'lucide-react';
+import { SupabaseAuthService } from '../services/supabaseAuthService';
 import { FirebaseAuthService } from '../services/firebaseAuthService';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (isNewAccount?: boolean) => void;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
@@ -52,8 +54,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           setIsLoading(false);
           return;
         }
-        await FirebaseAuthService.loginWithEmail(email, password);
-        setSuccessMsg('Login realizado com sucesso! Sincronizando dados...');
+
+        // Try Supabase Auth first
+        try {
+          await SupabaseAuthService.loginWithEmail(email, password);
+        } catch (supErr: any) {
+          // If Supabase fails, try Firebase fallback
+          try {
+            await FirebaseAuthService.loginWithEmail(email, password);
+          } catch {
+            throw supErr;
+          }
+        }
+
+        setSuccessMsg('Login realizado com sucesso! Sincronizando banco de dados...');
         setTimeout(() => {
           onSuccess();
           onClose();
@@ -74,10 +88,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           setIsLoading(false);
           return;
         }
-        await FirebaseAuthService.registerWithEmail(name, email, password);
-        setSuccessMsg('Conta criada com sucesso! Seus dados foram salvos na nuvem.');
+
+        // Register in Supabase
+        try {
+          await SupabaseAuthService.registerWithEmail(name, email, password);
+        } catch (supErr: any) {
+          try {
+            await FirebaseAuthService.registerWithEmail(name, email, password);
+          } catch {
+            throw supErr;
+          }
+        }
+
+        setSuccessMsg('Conta criada com sucesso! Nova gestão de estoque iniciada no Supabase.');
         setTimeout(() => {
-          onSuccess();
+          onSuccess(true);
           onClose();
         }, 800);
       } else if (mode === 'forgot') {
@@ -86,22 +111,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           setIsLoading(false);
           return;
         }
-        await FirebaseAuthService.resetPassword(email);
+        try {
+          await SupabaseAuthService.resetPassword(email);
+        } catch {
+          await FirebaseAuthService.resetPassword(email);
+        }
         setSuccessMsg('Link de redefinição de senha enviado para o seu e-mail!');
       }
     } catch (err: any) {
       console.error('Auth error:', err);
-      let msg = 'Ocorreu um erro ao processar. Tente novamente.';
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-        msg = 'E-mail ou senha incorretos.';
-      } else if (err.code === 'auth/email-already-in-use') {
-        msg = 'Este e-mail já está cadastrado. Faça login ou use outro.';
-      } else if (err.code === 'auth/invalid-email') {
-        msg = 'Formato de e-mail inválido.';
-      } else if (err.code === 'auth/weak-password') {
-        msg = 'Senha fraca. Use pelo menos 6 caracteres.';
-      } else if (err.message) {
+      let msg = 'Ocorreu um erro ao processar. Verifique os dados e tente novamente.';
+      if (err.message) {
         msg = err.message;
+      }
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' || msg.includes('Invalid login credentials')) {
+        msg = 'E-mail ou senha incorretos.';
+      } else if (err.code === 'auth/email-already-in-use' || msg.includes('User already registered')) {
+        msg = 'Este e-mail já está cadastrado. Faça login ou use outro.';
+      } else if (err.code === 'auth/weak-password' || msg.includes('Password should be at least')) {
+        msg = 'Senha fraca. Use pelo menos 6 caracteres.';
       }
       setErrorMsg(msg);
     } finally {
@@ -114,16 +142,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setSuccessMsg('');
     setIsLoading(true);
     try {
-      await FirebaseAuthService.loginWithGoogle();
-      setSuccessMsg('Conectado com Google! Sincronizando estoque...');
-      setTimeout(() => {
-        onSuccess();
-        onClose();
-      }, 800);
+      await SupabaseAuthService.loginWithGoogle();
     } catch (err: any) {
-      console.error('Google auth error:', err);
-      if (err.code !== 'auth/popup-closed-by-user') {
-        setErrorMsg('Erro ao conectar com Google: ' + (err.message || 'Tente novamente.'));
+      try {
+        await FirebaseAuthService.loginWithGoogle();
+        setSuccessMsg('Conectado com Google! Sincronizando estoque...');
+        setTimeout(() => {
+          onSuccess();
+          onClose();
+        }, 800);
+      } catch (fbErr: any) {
+        console.error('Google auth error:', fbErr);
+        if (fbErr.code !== 'auth/popup-closed-by-user') {
+          setErrorMsg('Erro ao conectar com Google: ' + (fbErr.message || err.message || 'Tente novamente.'));
+        }
       }
     } finally {
       setIsLoading(false);
@@ -131,8 +163,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-150">
-      <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col">
+    <div 
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-150"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col my-auto text-slate-900">
         
         {/* Header Visual */}
         <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950 text-white p-6 relative overflow-hidden">
@@ -140,15 +179,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <Boxes className="w-36 h-36" />
           </div>
 
+          {/* Prominent Close Button */}
           <button
+            type="button"
             onClick={onClose}
-            className="absolute top-4 right-4 p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+            aria-label="Fechar"
+            title="Fechar janela"
+            className="absolute top-4 right-4 z-10 w-9 h-9 flex items-center justify-center rounded-full bg-slate-800/90 hover:bg-slate-700 text-white border border-slate-600 shadow-sm transition-all active:scale-95 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
 
-          <div className="flex items-center gap-3">
-            <div className="p-3 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+          <div className="flex items-center gap-3 pr-10">
+            <div className="p-3 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0">
               <ShieldCheck className="w-6 h-6" />
             </div>
             <div>
@@ -247,35 +290,35 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           <form onSubmit={handleAuthSubmit} className="space-y-3.5">
             {mode === 'register' && (
               <div>
-                <label className="block text-[11px] font-black text-slate-700 uppercase tracking-wider mb-1">
+                <label className="block text-[11px] font-black text-slate-800 uppercase tracking-wider mb-1">
                   Seu Nome / Nome do Estabelecimento
                 </label>
                 <div className="relative">
-                  <UserIcon className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <UserIcon className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="Ex: Carlos Silva / Hamburgueria do Chef"
-                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 font-semibold focus:ring-2 focus:ring-emerald-500 bg-white"
+                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 font-bold text-slate-900 bg-white placeholder:text-slate-400 focus:bg-white focus:text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   />
                 </div>
               </div>
             )}
 
             <div>
-              <label className="block text-[11px] font-black text-slate-700 uppercase tracking-wider mb-1">
+              <label className="block text-[11px] font-black text-slate-800 uppercase tracking-wider mb-1">
                 E-mail *
               </label>
               <div className="relative">
-                <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="email"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="seuemail@exemplo.com"
-                  className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 font-semibold focus:ring-2 focus:ring-emerald-500 bg-white"
+                  className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 font-bold text-slate-900 bg-white placeholder:text-slate-400 focus:bg-white focus:text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
             </div>
@@ -283,7 +326,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             {mode !== 'forgot' && (
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="block text-[11px] font-black text-slate-700 uppercase tracking-wider">
+                  <label className="block text-[11px] font-black text-slate-800 uppercase tracking-wider">
                     Senha *
                   </label>
                   {mode === 'login' && (
@@ -297,14 +340,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   )}
                 </div>
                 <div className="relative">
-                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="password"
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 font-semibold focus:ring-2 focus:ring-emerald-500 bg-white"
+                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 font-bold text-slate-900 bg-white placeholder:text-slate-400 focus:bg-white focus:text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   />
                 </div>
               </div>
@@ -312,18 +355,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
             {mode === 'register' && (
               <div>
-                <label className="block text-[11px] font-black text-slate-700 uppercase tracking-wider mb-1">
+                <label className="block text-[11px] font-black text-slate-800 uppercase tracking-wider mb-1">
                   Confirmar Senha *
                 </label>
                 <div className="relative">
-                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="password"
                     required
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 font-semibold focus:ring-2 focus:ring-emerald-500 bg-white"
+                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 font-bold text-slate-900 bg-white placeholder:text-slate-400 focus:bg-white focus:text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   />
                 </div>
               </div>
@@ -361,20 +404,33 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </button>
           </form>
 
-          {mode === 'forgot' && (
+          {/* Secondary Action / Close */}
+          <div className="flex items-center justify-between pt-1">
+            {mode === 'forgot' ? (
+              <button
+                type="button"
+                onClick={() => { setMode('login'); setErrorMsg(''); setSuccessMsg(''); }}
+                className="text-xs font-bold text-slate-600 hover:text-slate-900 cursor-pointer"
+              >
+                ← Voltar para o Login
+              </button>
+            ) : (
+              <span />
+            )}
+
             <button
               type="button"
-              onClick={() => { setMode('login'); setErrorMsg(''); setSuccessMsg(''); }}
-              className="w-full text-center text-xs font-bold text-slate-600 hover:text-slate-900 py-1 cursor-pointer"
+              onClick={onClose}
+              className="text-xs font-bold text-slate-500 hover:text-slate-800 hover:underline cursor-pointer ml-auto"
             >
-              ← Voltar para o Login
+              Cancelar / Fechar
             </button>
-          )}
+          </div>
 
           {/* Cloud Info Footer */}
-          <div className="pt-3 border-t border-slate-100 flex items-center justify-center gap-1.5 text-[11px] text-slate-400 text-center">
-            <CloudCheck className="w-4 h-4 text-emerald-600" />
-            <span>Seus dados sincronizados com segurança no Firebase Cloud</span>
+          <div className="pt-3 border-t border-slate-100 flex items-center justify-center gap-1.5 text-[11px] text-slate-500 text-center font-medium">
+            <CloudCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>Sincronização em Nuvem via <strong>Supabase Database & Auth</strong></span>
           </div>
         </div>
       </div>

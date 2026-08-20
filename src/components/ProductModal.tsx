@@ -26,7 +26,8 @@ export const ProductModal: React.FC<ProductModalProps> = ({
   const [category, setCategory] = useState(DEFAULT_CATEGORIES[0]);
   const [quantity, setQuantity] = useState<number | ''>(0);
   const [unit, setUnit] = useState<Unit>('Unidade');
-  const [minStock, setMinStock] = useState<number | ''>(5);
+  const [hasMinStock, setHasMinStock] = useState(false);
+  const [minStock, setMinStock] = useState<number | ''>('');
   const [hasPrice, setHasPrice] = useState(true);
   const [costPrice, setCostPrice] = useState<number | ''>('');
   const [sellPrice, setSellPrice] = useState<number | ''>('');
@@ -52,7 +53,11 @@ export const ProductModal: React.FC<ProductModalProps> = ({
       setCategory(productToEdit.category);
       setQuantity(productToEdit.quantity);
       setUnit(productToEdit.unit);
-      setMinStock(productToEdit.minStock);
+      
+      const hasDefinedMin = (productToEdit.minStock !== undefined && productToEdit.minStock > 0);
+      setHasMinStock(hasDefinedMin);
+      setMinStock(hasDefinedMin ? productToEdit.minStock : '');
+
       const cPrice = productToEdit.costPrice ?? productToEdit.price ?? 0;
       const sPrice = productToEdit.sellPrice ?? 0;
       setHasPrice(cPrice > 0 || sPrice > 0);
@@ -68,7 +73,8 @@ export const ProductModal: React.FC<ProductModalProps> = ({
       setCategory(availableCategories[0] || '📦 Outros');
       setQuantity(0);
       setUnit('Unidade');
-      setMinStock(5);
+      setHasMinStock(false);
+      setMinStock('');
       setHasPrice(true);
       setCostPrice('');
       setSellPrice('');
@@ -143,7 +149,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
       : category;
 
     const numQty = isRecipe ? 0 : (typeof quantity === 'number' ? quantity : parseFloat(quantity) || 0);
-    const numMin = isRecipe ? 0 : (typeof minStock === 'number' ? minStock : parseFloat(minStock) || 0);
+    const numMin = (isRecipe || !hasMinStock) ? 0 : (typeof minStock === 'number' ? minStock : parseFloat(minStock) || 0);
     const numCost = hasPrice ? (typeof costPrice === 'number' ? costPrice : parseFloat(costPrice) || 0) : 0;
     const numSell = hasPrice ? (typeof sellPrice === 'number' ? sellPrice : parseFloat(sellPrice) || 0) : 0;
 
@@ -456,19 +462,48 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Estoque Mínimo de Segurança *
+              {/* Estoque Mínimo Opcional */}
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2.5">
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={hasMinStock}
+                    onChange={(e) => {
+                      setHasMinStock(e.target.checked);
+                      if (!e.target.checked) {
+                        setMinStock('');
+                      } else if (minStock === '' || minStock === 0) {
+                        setMinStock(1);
+                      }
+                    }}
+                    className="mt-0.5 w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
+                  />
+                  <div>
+                    <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
+                      Definir Estoque Mínimo de Segurança (Opcional)
+                    </span>
+                    <span className="text-[11px] text-slate-500 font-normal block mt-0.5">
+                      Permite alertar quando o item estiver com estoque baixo. Se desmarcado, o item não terá exigência de estoque mínimo.
+                    </span>
+                  </div>
                 </label>
-                <input
-                  type="number"
-                  step="any"
-                  min="0"
-                  required
-                  value={minStock}
-                  onChange={(e) => setMinStock(e.target.value === '' ? '' : parseFloat(e.target.value))}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 text-sm font-semibold text-slate-800"
-                />
+
+                {hasMinStock && (
+                  <div className="pt-1 animate-in fade-in duration-150">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Quantidade Mínima de Segurança
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={minStock}
+                      onChange={(e) => setMinStock(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                      placeholder="Ex: 5"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 text-sm font-semibold text-slate-800 bg-white"
+                    />
+                  </div>
+                )}
               </div>
             </>
           )}
