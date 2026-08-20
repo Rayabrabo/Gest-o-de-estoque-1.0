@@ -182,13 +182,15 @@ export const AddToCartModal: React.FC<AddToCartModalProps> = ({
           <div className="flex items-center justify-between text-xs text-slate-600 pt-1">
             <span>
               Estoque Atual:{' '}
-              <strong className={product.quantity <= product.minStock ? 'text-rose-600 font-bold' : 'text-slate-800'}>
+              <strong className={product.quantity <= 0 ? 'text-rose-600 font-bold' : (product.minStock > 0 && product.quantity <= product.minStock) ? 'text-amber-600 font-bold' : 'text-slate-800'}>
                 {product.quantity} {product.unit}
               </strong>
             </span>
-            <span>
-              Estoque Mínimo: <strong>{product.minStock} {product.unit}</strong>
-            </span>
+            {product.minStock > 0 && (
+              <span>
+                Estoque Mínimo: <strong>{product.minStock} {product.unit}</strong>
+              </span>
+            )}
           </div>
         </div>
 
@@ -400,7 +402,7 @@ export const AddToCartModal: React.FC<AddToCartModalProps> = ({
                   </button>
                 </>
               )}
-              {product.minStock > product.quantity && (
+              {product.minStock > 0 && product.minStock > product.quantity && (
                 <button
                   type="button"
                   onClick={() => {

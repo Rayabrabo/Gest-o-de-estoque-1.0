@@ -595,25 +595,44 @@ export class PdfService {
     doc.text(`Data: ${formattedDate} às ${formattedTime}`, hasLogo ? 100 : 138, 18);
 
     const showPrices = settings.showPrices !== false;
+    const showMinStock = settings.showMinStock === true;
 
-    // Main Shopping Table with Clean Category
+    // Main Shopping Table with Dynamic Columns based on settings
+    const headRow = ['Produto', 'Categoria', 'Est. Atual'];
+    if (showMinStock) headRow.push('Mínimo');
+    headRow.push('Comprar');
+    if (showPrices) {
+      headRow.push('P. Custo', 'Total Custo');
+    }
+
     const tableData = orderedShopping.map(item => {
       const costVal = item.costPrice ?? item.price ?? 0;
       const totalCostEst = item.suggestedQuantity * costVal;
-      return [
+      const row = [
         item.productName,
         stripEmojis(item.category),
-        `${item.currentQuantity} ${formatUnitAbbrev(item.unit, item.currentQuantity)}`,
-        `${item.minStock} ${formatUnitAbbrev(item.unit, item.minStock)}`,
-        `${item.suggestedQuantity} ${formatUnitAbbrev(item.unit, item.suggestedQuantity)}`,
-        showPrices && costVal > 0 ? `R$ ${costVal.toFixed(2).replace('.', ',')}` : '-',
-        showPrices && totalCostEst > 0 ? `R$ ${totalCostEst.toFixed(2).replace('.', ',')}` : '-'
+        `${item.currentQuantity} ${formatUnitAbbrev(item.unit, item.currentQuantity)}`
       ];
+
+      if (showMinStock) {
+        row.push(`${item.minStock} ${formatUnitAbbrev(item.unit, item.minStock)}`);
+      }
+
+      row.push(`${item.suggestedQuantity} ${formatUnitAbbrev(item.unit, item.suggestedQuantity)}`);
+
+      if (showPrices) {
+        row.push(
+          costVal > 0 ? `R$ ${costVal.toFixed(2).replace('.', ',')}` : '-',
+          totalCostEst > 0 ? `R$ ${totalCostEst.toFixed(2).replace('.', ',')}` : '-'
+        );
+      }
+
+      return row;
     });
 
     autoTable(doc, {
       startY: 32,
-      head: [['Produto', 'Categoria', 'Est. Atual', 'Mínimo', 'Comprar', 'P. Custo', 'Total Custo']],
+      head: [headRow],
       body: tableData,
       theme: 'grid',
       headStyles: {
@@ -626,15 +645,6 @@ export class PdfService {
         fontSize: 7.5,
         cellPadding: 2,
         textColor: [15, 23, 42]
-      },
-      columnStyles: {
-        0: { cellWidth: 46 },
-        1: { cellWidth: 32 },
-        2: { cellWidth: 20, halign: 'right' },
-        3: { cellWidth: 20, halign: 'right' },
-        4: { cellWidth: 22, halign: 'right' },
-        5: { cellWidth: 21, halign: 'right' },
-        6: { cellWidth: 21, halign: 'right' }
       }
     });
 

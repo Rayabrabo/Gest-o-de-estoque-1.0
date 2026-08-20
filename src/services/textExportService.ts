@@ -255,10 +255,20 @@ export const TextExportService = {
   },
 
   /**
-   * Generates formatted text for Shopping List
+   * Generates formatted text for Shopping List (clean, direct product and quantity notation)
    */
-  generateShoppingListText(items: PurchaseItem[], settings?: SystemSettings): string {
-    const showPrices = settings?.showPrices !== false;
+  generateShoppingListText(
+    items: PurchaseItem[], 
+    settings?: SystemSettings,
+    options?: {
+      showCurrentStock?: boolean;
+      showMinStock?: boolean;
+      showPrices?: boolean;
+    }
+  ): string {
+    const showPrices = options?.showPrices ?? false;
+    const showCurrentStock = options?.showCurrentStock ?? false;
+    const showMinStock = options?.showMinStock ?? (settings?.showMinStock === true);
     const company = settings?.companyName;
     const pendingItems = StorageService.sortByCategoryOrder(items.filter(i => !i.isPurchased), settings);
 
@@ -294,15 +304,29 @@ export const TextExportService = {
         totalCost += subtotal;
 
         const buyStr = `${item.suggestedQuantity} ${formatUnitAbbrev(item.unit, item.suggestedQuantity)}`;
-        const curStr = `${item.currentQuantity} ${formatUnitAbbrev(item.unit, item.currentQuantity)}`;
-        const minStr = `${item.minStock} ${formatUnitAbbrev(item.unit, item.minStock)}`;
+        
+        // Clean direct format: "* Produto — 2 kg" / "* Produto — 5 un." / "* Produto — 3 pct."
+        let line = `* ${item.productName} — ${buyStr}`;
 
-        let priceText = '';
-        if (showPrices && costPrice > 0) {
-          priceText = ` | Custo: R$ ${costPrice.toFixed(2).replace('.', ',')} un (Subtotal: R$ ${subtotal.toFixed(2).replace('.', ',')})`;
+        const extraDetails: string[] = [];
+        if (showCurrentStock) {
+          const curStr = `${item.currentQuantity} ${formatUnitAbbrev(item.unit, item.currentQuantity)}`;
+          extraDetails.push(`Atual: ${curStr}`);
+        }
+        if (showMinStock && item.minStock > 0) {
+          const minStr = `${item.minStock} ${formatUnitAbbrev(item.unit, item.minStock)}`;
+          extraDetails.push(`Mín: ${minStr}`);
         }
 
-        text += `* ${item.productName} — Comprar ${buyStr} (Atual: ${curStr} | Mín: ${minStr})${priceText}\n`;
+        if (extraDetails.length > 0) {
+          line += ` (${extraDetails.join(' | ')})`;
+        }
+
+        if (showPrices && costPrice > 0) {
+          line += ` | Custo: R$ ${costPrice.toFixed(2).replace('.', ',')} (Subtotal: R$ ${subtotal.toFixed(2).replace('.', ',')})`;
+        }
+
+        text += `${line}\n`;
       });
       text += `\n`;
     });

@@ -291,7 +291,10 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                       </div>
 
                       <p className="text-xs text-slate-500 mt-0.5">
-                        Estoque Atual: <span className="font-bold text-rose-600">{item.currentQuantity} {item.unit}</span> | Mínimo: {item.minStock} {item.unit}
+                        Estoque Atual: <span className={`font-bold ${item.currentQuantity <= 0 ? 'text-rose-600' : 'text-slate-800'}`}>{item.currentQuantity} {item.unit}</span>
+                        {settings.showMinStock === true && item.minStock > 0 && (
+                          <span> | Mínimo: <span className="font-semibold text-slate-600">{item.minStock} {item.unit}</span></span>
+                        )}
                       </p>
 
                       {avgDaily > 0 && (

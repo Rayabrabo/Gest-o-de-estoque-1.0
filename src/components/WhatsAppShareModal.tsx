@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { MessageSquare, Copy, Check, ExternalLink, X, Download } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { MessageSquare, Copy, Check, ExternalLink, X, Download, RotateCcw, Edit3 } from 'lucide-react';
 import { TextExportService } from '../services/textExportService';
 
 interface WhatsAppShareModalProps {
@@ -19,12 +19,17 @@ export const WhatsAppShareModal: React.FC<WhatsAppShareModalProps> = ({
   textToShare,
   onDownloadPdf
 }) => {
+  const [editableText, setEditableText] = useState(textToShare);
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    setEditableText(textToShare);
+  }, [textToShare, isOpen]);
 
   if (!isOpen) return null;
 
   const handleCopy = async () => {
-    const success = await TextExportService.copyToClipboard(textToShare);
+    const success = await TextExportService.copyToClipboard(editableText);
     if (success) {
       setCopied(true);
       setTimeout(() => setCopied(false), 3000);
@@ -32,13 +37,20 @@ export const WhatsAppShareModal: React.FC<WhatsAppShareModalProps> = ({
   };
 
   const handleOpenWhatsApp = () => {
-    const url = TextExportService.getWhatsAppShareUrl(textToShare);
+    const url = TextExportService.getWhatsAppShareUrl(editableText);
     window.open(url, '_blank');
   };
 
+  const handleReset = () => {
+    setEditableText(textToShare);
+  };
+
+  const isModified = editableText !== textToShare;
+  const lineCount = editableText.split('\n').filter(l => l.trim().length > 0).length;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-lg overflow-hidden p-6 animate-in fade-in zoom-in-95 duration-200 space-y-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-lg overflow-hidden p-6 animate-in zoom-in-95 duration-200 space-y-4">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-100 pb-3">
           <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
@@ -58,19 +70,46 @@ export const WhatsAppShareModal: React.FC<WhatsAppShareModalProps> = ({
           </button>
         </div>
 
-        {/* Text Preview Box */}
+        {/* Edit Notice & Tooling bar */}
+        <div className="flex items-center justify-between bg-emerald-50/70 border border-emerald-200/80 px-3 py-2 rounded-xl text-xs">
+          <div className="flex items-center gap-1.5 text-emerald-900 font-semibold">
+            <Edit3 className="w-3.5 h-3.5 text-emerald-700" />
+            <span>Texto 100% Editável: ajuste itens e quantidades livremente</span>
+          </div>
+          {isModified && (
+            <button
+              type="button"
+              onClick={handleReset}
+              className="flex items-center gap-1 text-[11px] font-bold text-slate-600 hover:text-slate-900 bg-white px-2 py-0.5 rounded-md border border-slate-300 shadow-2xs hover:bg-slate-50 transition-colors cursor-pointer"
+              title="Reverter alterações e voltar ao texto original gerado"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Restaurar Original</span>
+            </button>
+          )}
+        </div>
+
+        {/* Text Preview / Edit Box */}
         <div className="relative">
           <textarea
-            readOnly
-            value={textToShare}
-            rows={9}
-            className="w-full p-3.5 bg-slate-50 rounded-xl border border-slate-200 font-mono text-xs text-slate-800 leading-relaxed focus:outline-none resize-none"
+            value={editableText}
+            onChange={(e) => setEditableText(e.target.value)}
+            rows={10}
+            placeholder="Digite ou edite o texto da lista..."
+            className="w-full p-3.5 bg-slate-50 focus:bg-white rounded-xl border border-slate-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 font-mono text-xs text-slate-800 leading-relaxed focus:outline-none resize-y transition-all"
           />
           {copied && (
             <div className="absolute top-3 right-3 bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-md flex items-center gap-1.5 animate-in fade-in">
               <Check className="w-3.5 h-3.5" />
               <span>Copiado!</span>
             </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between text-[11px] text-slate-400 font-medium px-1">
+          <span>{lineCount} linhas de texto</span>
+          {isModified && (
+            <span className="text-amber-600 font-semibold">● Texto modificado manualmente</span>
           )}
         </div>
 
